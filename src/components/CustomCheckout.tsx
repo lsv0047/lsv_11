@@ -326,4 +326,4 @@ const CustomCheckout: React.FC<CustomCheckoutProps> = ({ plan, autoRenew, onSucc
   );
 };
 
-export default CustomCheckout;
+export default CustomCheckout; 
