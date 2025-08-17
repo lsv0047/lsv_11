@@ -15,8 +15,15 @@ import {
 } from '@stripe/react-stripe-js';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
+import { createClient } from '@supabase/supabase-js';
 
 const stripePromise = loadStripe(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY || '');
+
+// Create Supabase client for authenticated requests
+const supabase = createClient(
+  import.meta.env.VITE_SUPABASE_URL,
+  import.meta.env.VITE_SUPABASE_ANON_KEY
+);
 
 interface PaymentMethod {
   id: string;
@@ -76,11 +83,18 @@ const AddPaymentMethodForm: React.FC<{
         throw new Error(paymentMethodError.message);
       }
 
+      // Get current session for auth
+      const { data: { session } } = await supabase.auth.getSession();
+      
+      if (!session?.access_token) {
+        throw new Error('Authentication required');
+      }
+
       // Attach payment method to customer
       const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/attach-payment-method`, {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+          'Authorization': `Bearer ${session.access_token}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
@@ -179,6 +193,20 @@ const BillingPage: React.FC = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
 
+  // Helper function to get authenticated headers
+  const getAuthHeaders = async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    
+    if (!session?.access_token) {
+      throw new Error('Authentication required. Please log in again.');
+    }
+
+    return {
+      'Authorization': `Bearer ${session.access_token}`,
+      'Content-Type': 'application/json',
+    };
+  };
+
   const loadBillingData = async () => {
     if (!user) return;
 
@@ -240,12 +268,11 @@ const BillingPage: React.FC = () => {
     try {
       console.log('🔍 Fetching payment methods for customer:', customerId);
       
+      const headers = await getAuthHeaders();
+      
       const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/get-payment-methods`, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-          'Content-Type': 'application/json',
-        },
+        headers,
         body: JSON.stringify({
           customerId: customerId
         })
@@ -337,13 +364,16 @@ const BillingPage: React.FC = () => {
 
     try {
       setReactivateLoading(true);
+      setError(''); // Clear any previous errors
+
+      // Get authenticated headers with user's session token
+      const headers = await getAuthHeaders();
+      
+      console.log('🔄 Attempting to reactivate subscription for user:', user.id);
       
       const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/reactivate-subscription`, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-          'Content-Type': 'application/json',
-        },
+        headers,
         body: JSON.stringify({
           paymentMethodId
         })
@@ -351,8 +381,12 @@ const BillingPage: React.FC = () => {
 
       if (!response.ok) {
         const errorData = await response.json();
+        console.error('❌ Reactivation failed:', response.status, errorData);
         throw new Error(errorData.error || 'Failed to reactivate subscription');
       }
+
+      const result = await response.json();
+      console.log('✅ Subscription reactivated successfully:', result);
 
       // Refresh billing data
       await loadBillingData();
@@ -363,9 +397,12 @@ const BillingPage: React.FC = () => {
         window.dispatchEvent(new CustomEvent('subscription-updated'));
         window.dispatchEvent(new CustomEvent('billing-updated'));
         window.dispatchEvent(new CustomEvent('subscription-refresh'));
+        // Also update localStorage to trigger storage event
+        localStorage.setItem('subscription-update-timestamp', Date.now().toString());
       }, 500);
       
     } catch (err: any) {
+      console.error('❌ Error reactivating subscription:', err);
       setError(err.message || 'Failed to reactivate subscription');
     } finally {
       setReactivateLoading(false);
@@ -385,12 +422,11 @@ const BillingPage: React.FC = () => {
     try {
       setActionLoading(`remove-${paymentMethodId}`);
       
+      const headers = await getAuthHeaders();
+      
       const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/detach-payment-method`, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-          'Content-Type': 'application/json',
-        },
+        headers,
         body: JSON.stringify({
           paymentMethodId
         })
@@ -418,12 +454,11 @@ const BillingPage: React.FC = () => {
     try {
       setActionLoading(`default-${paymentMethodId}`);
       
+      const headers = await getAuthHeaders();
+      
       const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/set-default-payment-method`, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-          'Content-Type': 'application/json',
-        },
+        headers,
         body: JSON.stringify({
           paymentMethodId,
           customerId: subscription.subscription.stripe_customer_id
@@ -634,6 +669,12 @@ const BillingPage: React.FC = () => {
         <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl flex items-center gap-3">
           <AlertCircle className="h-5 w-5" />
           {error}
+          <button 
+            onClick={() => setError('')}
+            className="ml-auto p-1 text-red-400 hover:text-red-600"
+          >
+            <X className="h-4 w-4" />
+          </button>
         </div>
       )}
 
@@ -1197,11 +1238,20 @@ const BillingPage: React.FC = () => {
                             </p>
                           </div>
                         </div>
-                        {method.is_default && (
-                          <span className="px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded-full font-medium">
-                            Default
-                          </span>
-                        )}
+                        <div className="flex items-center gap-2">
+                          {reactivateLoading ? (
+                            <Loader2 className="h-4 w-4 animate-spin text-green-600" />
+                          ) : (
+                            <>
+                              {method.is_default && (
+                                <span className="px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded-full font-medium">
+                                  Default
+                                </span>
+                              )}
+                              <CheckCircle className="h-4 w-4 text-green-600" />
+                            </>
+                          )}
+                        </div>
                       </button>
                     ))}
                   </div>
@@ -1212,7 +1262,8 @@ const BillingPage: React.FC = () => {
             <div className="flex gap-3 mt-6">
               <button
                 onClick={() => setShowReactivateModal(false)}
-                className="flex-1 py-3 px-4 border border-gray-200 text-gray-700 rounded-xl hover:bg-gray-50 transition-colors"
+                disabled={reactivateLoading}
+                className="flex-1 py-3 px-4 border border-gray-200 text-gray-700 rounded-xl hover:bg-gray-50 transition-colors disabled:opacity-50"
               >
                 Cancel
               </button>
