@@ -327,3 +327,4 @@ GRANT EXECUTE ON FUNCTION get_subscription_access_status TO authenticated;
 GRANT EXECUTE ON FUNCTION reactivate_subscription TO authenticated;
 GRANT EXECUTE ON FUNCTION cancel_subscription_safe TO authenticated;
 GRANT EXECUTE ON FUNCTION get_billing_period_text TO authenticated;
+ 
