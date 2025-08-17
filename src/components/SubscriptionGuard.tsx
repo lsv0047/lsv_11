@@ -80,11 +80,11 @@ const SubscriptionGuard: React.FC<SubscriptionGuardProps> = ({ children, require
   // Show upgrade modal if required feature is not available
   if (showUpgradeModal && requiredFeature && !subscriptionData?.features[requiredFeature]) {
     return (
-      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50 overflow-y-auto">
         <motion.div
           initial={{ opacity: 0, scale: 0.9 }}
           animate={{ opacity: 1, scale: 1 }}
-          className="bg-white rounded-2xl p-6 sm:p-8 max-w-sm sm:max-w-md w-full mx-4 border border-gray-200 shadow-xl relative max-h-[90vh] overflow-y-auto"
+          className="bg-white rounded-2xl p-6 sm:p-8 max-w-sm sm:max-w-md w-full mx-4 border border-gray-200 shadow-xl relative my-8"
         >
           <button
             onClick={() => setShowUpgradeModal(false)}
