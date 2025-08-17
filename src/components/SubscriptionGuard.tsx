@@ -156,7 +156,7 @@ const SubscriptionGuard: React.FC<SubscriptionGuardProps> = ({ children, require
               </span>
             </div>
             <button
-              onClick={handleUpgrade}
+              onClick={() => navigate('/billing')}
               className="bg-white text-gray-900 px-4 py-2 rounded-lg font-medium hover:bg-gray-100 transition-colors flex items-center gap-2"
             >
               Upgrade Now
@@ -213,7 +213,7 @@ const SubscriptionGuard: React.FC<SubscriptionGuardProps> = ({ children, require
               </span>
             </div>
             <button
-              onClick={handleUpgrade}
+              onClick={() => navigate('/billing')}
               className="bg-white text-gray-900 px-4 py-2 rounded-lg font-medium hover:bg-gray-100 transition-colors flex items-center gap-2"
             >
               Reactivate
