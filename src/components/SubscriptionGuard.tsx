@@ -80,26 +80,33 @@ const SubscriptionGuard: React.FC<SubscriptionGuardProps> = ({ children, require
   // Show upgrade modal if required feature is not available
   if (showUpgradeModal && requiredFeature && !subscriptionData?.features[requiredFeature]) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
         <motion.div
           initial={{ opacity: 0, scale: 0.9 }}
           animate={{ opacity: 1, scale: 1 }}
-          className="bg-white rounded-2xl p-8 max-w-md w-full border border-gray-200 shadow-xl"
+          className="bg-white rounded-2xl p-6 sm:p-8 max-w-sm sm:max-w-md w-full mx-4 border border-gray-200 shadow-xl relative max-h-[90vh] overflow-y-auto"
         >
+          <button
+            onClick={() => setShowUpgradeModal(false)}
+            className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 transition-colors"
+          >
+            <X className="h-5 w-5" />
+          </button>
+          
           <div className="text-center mb-6">
-            <div className="w-16 h-16 bg-gradient-to-r from-[#E6A85C] via-[#E85A9B] to-[#D946EF] rounded-2xl flex items-center justify-center mx-auto mb-4">
+            <div className="w-16 h-16 bg-gradient-to-r from-[#F7946C] to-[#C64ACB] rounded-2xl flex items-center justify-center mx-auto mb-4">
               <Crown className="h-8 w-8 text-white" />
             </div>
-            <h3 className="text-xl font-bold text-gray-900 mb-2 font-['Space_Grotesk']">
+            <h3 className="text-lg sm:text-xl font-bold text-gray-900 mb-2">
               Upgrade Required
             </h3>
-            <p className="text-gray-600">
+            <p className="text-sm sm:text-base text-gray-600">
               This feature requires a paid subscription to access.
             </p>
           </div>
 
           <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl p-4 mb-6">
-            <h4 className="font-medium text-blue-900 mb-2">Unlock Premium Features:</h4>
+            <h4 className="text-sm sm:text-base font-medium text-blue-900 mb-2">Unlock Premium Features:</h4>
             <ul className="space-y-1 text-sm text-blue-800">
               <li className="flex items-center gap-2">
                 <CheckCircle className="h-4 w-4" />
@@ -116,16 +123,16 @@ const SubscriptionGuard: React.FC<SubscriptionGuardProps> = ({ children, require
             </ul>
           </div>
 
-          <div className="flex gap-3">
+          <div className="flex flex-col sm:flex-row gap-3">
             <button
               onClick={() => setShowUpgradeModal(false)}
-              className="flex-1 py-3 px-4 border border-gray-200 text-gray-700 rounded-xl hover:bg-gray-50 transition-colors"
+              className="flex-1 py-3 px-4 border border-gray-200 text-gray-700 rounded-xl hover:bg-gray-50 transition-colors text-sm sm:text-base"
             >
               Maybe Later
             </button>
             <button
               onClick={handleUpgrade}
-              className="flex-1 py-3 px-4 bg-gradient-to-r from-[#E6A85C] via-[#E85A9B] to-[#D946EF] text-white rounded-xl hover:shadow-lg transition-all duration-200 flex items-center justify-center gap-2"
+              className="flex-1 py-3 px-4 bg-gradient-to-r from-[#F7946C] to-[#C64ACB] text-white rounded-xl hover:shadow-lg transition-all duration-200 flex items-center justify-center gap-2 text-sm sm:text-base"
             >
               Upgrade Now
               <ArrowRight className="h-4 w-4" />
@@ -144,7 +151,7 @@ const SubscriptionGuard: React.FC<SubscriptionGuardProps> = ({ children, require
     return (
       <div className="min-h-screen bg-gray-50">
         {/* Trial Warning Banner */}
-        <div className="bg-gradient-to-r from-yellow-400 to-orange-500 text-white p-4">
+        <div className="bg-gradient-to-r from-[#F7946C] to-[#C64ACB] text-white p-4">
           <div className="max-w-7xl mx-auto flex items-center justify-between">
             <div className="flex items-center gap-3">
               <Clock className="h-5 w-5" />
@@ -157,7 +164,7 @@ const SubscriptionGuard: React.FC<SubscriptionGuardProps> = ({ children, require
             </div>
             <button
               onClick={() => navigate('/billing')}
-              className="bg-white text-gray-900 px-4 py-2 rounded-lg font-medium hover:bg-gray-100 transition-colors flex items-center gap-2"
+              className="bg-white text-gray-900 px-4 py-2 rounded-lg font-medium hover:bg-gray-100 transition-colors flex items-center gap-2 text-sm sm:text-base"
             >
               Upgrade Now
               <ArrowRight className="h-4 w-4" />
@@ -189,7 +196,7 @@ const SubscriptionGuard: React.FC<SubscriptionGuardProps> = ({ children, require
           </p>
           <button
             onClick={handleUpgrade}
-            className="w-full py-3 px-4 bg-gradient-to-r from-[#E6A85C] via-[#E85A9B] to-[#D946EF] text-white rounded-xl hover:shadow-lg transition-all duration-200 flex items-center justify-center gap-2"
+            className="w-full py-3 px-4 bg-gradient-to-r from-[#F7946C] to-[#C64ACB] text-white rounded-xl hover:shadow-lg transition-all duration-200 flex items-center justify-center gap-2"
           >
             Renew Subscription
             <ArrowRight className="h-4 w-4" />
@@ -204,19 +211,19 @@ const SubscriptionGuard: React.FC<SubscriptionGuardProps> = ({ children, require
     return (
       <div className="min-h-screen bg-gray-50">
         {/* Cancellation Notice Banner */}
-        <div className="bg-gradient-to-r from-orange-400 to-red-500 text-white p-4">
-          <div className="max-w-7xl mx-auto flex items-center justify-between">
+        <div className="bg-gradient-to-r from-[#F7946C] to-[#C64ACB] text-white p-4">
+          <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
             <div className="flex items-center gap-3">
               <AlertTriangle className="h-5 w-5" />
-              <span className="font-medium">
+              <span className="font-medium text-sm sm:text-base">
                 Subscription cancelled. Access continues until {new Date(subscriptionData.subscription.current_period_end).toLocaleDateString()}
               </span>
             </div>
             <button
-              onClick={() => navigate('/dashboard/billing')}
-              className="bg-white text-gray-900 px-4 py-2 rounded-lg font-medium hover:bg-gray-100 transition-colors flex items-center gap-2"
+              onClick={() => navigate('/billing')}
+              className="bg-white text-gray-900 px-4 py-2 rounded-lg font-medium hover:bg-gray-100 transition-colors flex items-center gap-2 text-sm sm:text-base whitespace-nowrap"
             >
-              Reactivate
+              Resubscribe
               <ArrowRight className="h-4 w-4" />
             </button>
           </div>
