@@ -18,6 +18,17 @@
     - Cancellation and resubscription handling
 */
 
+-- Drop conflicting version of the webhook function first
+DROP FUNCTION IF EXISTS handle_subscription_webhook(
+  uuid,
+  subscription_plan_type,
+  subscription_status,
+  text,
+  text,
+  timestamptz,
+  timestamptz
+);
+
 -- Enhanced subscription webhook handler with better error handling
 CREATE OR REPLACE FUNCTION handle_subscription_webhook(
   p_user_id uuid,
