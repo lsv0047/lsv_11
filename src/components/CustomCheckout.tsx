@@ -47,116 +47,25 @@ const CheckoutForm: React.FC<{
   const { user } = useAuth();
 
   const handleSubmit = async (event: React.FormEvent) => {
-  event.preventDefault();
+    event.preventDefault();
 
-  if (!stripe || !elements || !user) {
-    return;
-  }
+    if (!stripe || !elements || !user) return;
 
-  setLoading(true);
-  setError('');
+    setLoading(true);
+    setError('');
 
-  try {
-    const cardElement = elements.getElement(CardElement);
-    if (!cardElement) {
-      throw new Error('Card element not found');
-    }
+    try {
+      const cardElement = elements.getElement(CardElement);
+      if (!cardElement) throw new Error('Card element not found');
 
-    // 🔹 Get fresh session from Supabase
-    const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-    if (sessionError || !session?.access_token) {
-      console.error("Supabase session error:", sessionError, session);
-      throw new Error('Authentication error. Please refresh and try again.');
-    }
-
-    // 🔹 Create PaymentIntent (or subscription) via backend
-    const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/create-payment`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${session.access_token}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        planType: plan.planId,
-        autoRenew,
-      })
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      console.error("Backend error response:", errorData);
-      throw new Error(errorData.error || 'Payment processing failed on server');
-    }
-
-    const { clientSecret, subscriptionId } = await response.json();
-    console.log("Received clientSecret:", clientSecret, "subscriptionId:", subscriptionId);
-
-    if (!clientSecret) {
-      throw new Error("No clientSecret returned from server");
-    }
-
-    // 🔹 Confirm payment directly with card details
-    const { error: confirmError, paymentIntent } = await stripe.confirmCardPayment(clientSecret, {
-      payment_method: {
-        card: cardElement,
-        billing_details: {
-          email: user.email,
-        },
-      },
-    });
-
-    if (confirmError) {
-      console.error("Stripe confirm error:", confirmError);
-      throw new Error(confirmError.message);
-    }
-
-    console.log("Payment successful:", paymentIntent);
-
-    // 🔹 Trigger success callback
-    onSuccess();
-
-    // 🔹 Refresh subscription state across app
-    setTimeout(() => {
-      window.dispatchEvent(new CustomEvent('subscription-updated'));
-      window.dispatchEvent(new CustomEvent('billing-updated'));
-      window.dispatchEvent(new CustomEvent('subscription-refresh'));
-
-      localStorage.setItem('subscription-update-timestamp', Date.now().toString());
-      window.dispatchEvent(new StorageEvent('storage', {
-        key: 'subscription-update-timestamp',
-        newValue: Date.now().toString()
-      }));
-    }, 1000);
-
-  } catch (err: any) {
-    console.error('Payment error:', err);
-    setError(err.message || 'Payment failed. Please try again.');
-  } finally {
-    setLoading(false);
-  }
-};
-
-
-      // Create payment method
-      const { error: paymentMethodError, paymentMethod } = await stripe.createPaymentMethod({
-        type: 'card',
-        card: cardElement,
-        billing_details: {
-          email: user.email,
-        },
-      });
-
-      if (paymentMethodError) {
-        throw new Error(paymentMethodError.message);
-      }
-
-      // Get fresh session
+      // 🔹 Get fresh session from Supabase
       const { data: { session }, error: sessionError } = await supabase.auth.getSession();
       if (sessionError || !session?.access_token) {
+        console.error("Supabase session error:", sessionError, session);
         throw new Error('Authentication error. Please refresh and try again.');
       }
 
-      // Create payment intent or subscription
+      // 🔹 Create PaymentIntent / subscription via backend
       const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/create-payment`, {
         method: 'POST',
         headers: {
@@ -166,49 +75,50 @@ const CheckoutForm: React.FC<{
         body: JSON.stringify({
           planType: plan.planId,
           autoRenew,
-          paymentMethodId: paymentMethod.id,
-        })
+        }),
       });
 
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Payment processing failed');
+        const errorData = await response.json().catch(() => ({}));
+        console.error("Backend error response:", errorData);
+        throw new Error(errorData.error || 'Payment processing failed on server');
       }
 
       const { clientSecret, subscriptionId } = await response.json();
+      console.log("Received clientSecret:", clientSecret, "subscriptionId:", subscriptionId);
 
-      // Confirm payment with card details
-const { error: confirmError, paymentIntent } = await stripe.confirmCardPayment(clientSecret, {
-  payment_method: {
-    card: cardElement,
-    billing_details: {
-      email: user.email,
-    },
-  },
-});
+      if (!clientSecret) throw new Error("No clientSecret returned from server");
 
-if (confirmError) {
-  throw new Error(confirmError.message);
-}
+      // 🔹 Confirm payment directly with card details
+      const { error: confirmError, paymentIntent } = await stripe.confirmCardPayment(clientSecret, {
+        payment_method: {
+          card: cardElement,
+          billing_details: { email: user.email },
+        },
+      });
 
+      if (confirmError) {
+        console.error("Stripe confirm error:", confirmError);
+        throw new Error(confirmError.message);
+      }
 
-      // Payment successful
+      console.log("Payment successful:", paymentIntent);
+
+      // 🔹 Trigger success callback
       onSuccess();
-      
-      // Trigger comprehensive subscription refresh
+
+      // 🔹 Refresh subscription state across app
       setTimeout(() => {
-        // Multiple events to ensure all components refresh
         window.dispatchEvent(new CustomEvent('subscription-updated'));
         window.dispatchEvent(new CustomEvent('billing-updated'));
         window.dispatchEvent(new CustomEvent('subscription-refresh'));
-        
-        // Storage event for cross-tab communication
+
         localStorage.setItem('subscription-update-timestamp', Date.now().toString());
         window.dispatchEvent(new StorageEvent('storage', {
           key: 'subscription-update-timestamp',
-          newValue: Date.now().toString()
+          newValue: Date.now().toString(),
         }));
-      }, 1000); // Increased delay to ensure backend processing
+      }, 1000);
 
     } catch (err: any) {
       console.error('Payment error:', err);
@@ -239,7 +149,6 @@ if (confirmError) {
             <p className="text-sm text-gray-600">{plan.period}</p>
           </div>
         </div>
-        
         {plan.savings && (
           <div className="bg-green-100 border border-green-200 rounded-lg p-3">
             <p className="text-green-800 font-medium text-sm">{plan.savings}</p>
@@ -261,13 +170,9 @@ if (confirmError) {
                     fontSize: '16px',
                     color: '#374151',
                     fontFamily: 'Inter, sans-serif',
-                    '::placeholder': {
-                      color: '#9CA3AF',
-                    },
+                    '::placeholder': { color: '#9CA3AF' },
                   },
-                  invalid: {
-                    color: '#EF4444',
-                  },
+                  invalid: { color: '#EF4444' },
                 },
                 hidePostalCode: false,
               }}
@@ -318,64 +223,14 @@ if (confirmError) {
           disabled={!stripe || loading}
           className="flex-1 py-3 px-4 bg-gradient-to-r from-[#E6A85C] via-[#E85A9B] to-[#D946EF] text-white rounded-xl hover:shadow-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
         >
-          {loading ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <>
-              <Lock className="h-4 w-4" />
-              Complete Payment {plan.price}
-            </>
-          )}
+          {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <>
+            <Lock className="h-4 w-4" /> Complete Payment {plan.price}
+          </>}
         </button>
       </div>
     </form>
   );
 };
 
-const CustomCheckout: React.FC<CustomCheckoutProps> = ({ plan, autoRenew, onSuccess, onCancel }) => {
-  const elementsOptions: StripeElementsOptions = {
-    appearance: {
-      theme: 'stripe',
-      variables: {
-        colorPrimary: '#E6A85C',
-        colorBackground: '#ffffff',
-        colorText: '#374151',
-        colorDanger: '#EF4444',
-        fontFamily: 'Inter, sans-serif',
-        spacingUnit: '4px',
-        borderRadius: '12px',
-      },
-    },
-  };
-
-  return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-50 flex items-center justify-center p-4">
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="bg-white rounded-2xl shadow-xl border border-gray-200 p-8 max-w-md w-full"
-      >
-        <div className="text-center mb-8">
-          <img src="/image.png" alt="VOYA" className="w-16 h-16 mx-auto mb-4" />
-          <h2 className="text-2xl font-bold text-gray-900 mb-2 font-['Space_Grotesk']">
-            Complete Your Upgrade
-          </h2>
-          <p className="text-gray-600">
-            Secure payment powered by Stripe
-          </p>
-        </div>
-
-        <Elements stripe={stripePromise} options={elementsOptions}>
-          <CheckoutForm
-            plan={plan}
-            autoRenew={autoRenew}
-            onSuccess={onSuccess}
-            onCancel={onCancel}
-          />
-        </Elements>
-      </motion.div>
-    </div>
-  );
-};
 
 export default CustomCheckout;
