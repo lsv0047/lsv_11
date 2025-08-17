@@ -618,9 +618,7 @@ const BillingPage: React.FC = () => {
   };
 
   const shouldShowUpgradePrompt = () => {
-    return subscription?.isExpired || 
-           (subscription?.isCancelled && subscription?.isExpired) ||
-           (!subscription?.hasAccess && subscription?.subscription?.status !== 'active');
+    return subscription?.isExpired && !subscription?.hasAccess;
   };
 
   if (loading) {
@@ -679,7 +677,7 @@ const BillingPage: React.FC = () => {
       )}
 
       {/* Upgrade Prompt for Expired/Cancelled Subscriptions */}
-      {shouldShowUpgradePrompt() && (
+      {subscription?.isExpired && (
         <div className="bg-gradient-to-r from-red-50 to-orange-50 border border-red-200 rounded-2xl p-6">
           <div className="flex items-center gap-4">
             <div className="w-12 h-12 bg-red-100 rounded-xl flex items-center justify-center">
@@ -687,13 +685,10 @@ const BillingPage: React.FC = () => {
             </div>
             <div className="flex-1">
               <h3 className="text-lg font-bold text-red-900">
-                {subscription?.isExpired ? 'Subscription Expired' : 'No Active Subscription'}
+                Subscription Expired
               </h3>
               <p className="text-red-700">
-                {subscription?.isExpired 
-                  ? 'Your subscription has expired. Upgrade now to continue using all features.'
-                  : 'You need an active subscription to access premium features.'
-                }
+                Your subscription has expired. Upgrade now to continue using all features.
               </p>
             </div>
             <button
@@ -702,6 +697,33 @@ const BillingPage: React.FC = () => {
             >
               <Crown className="h-4 w-4" />
               Upgrade Now
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Reactivation Prompt for Cancelled but Active Subscriptions */}
+      {subscription?.isCancelled && !subscription?.isExpired && subscription?.hasAccess && (
+        <div className="bg-gradient-to-r from-yellow-50 to-orange-50 border border-yellow-200 rounded-2xl p-6">
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 bg-yellow-100 rounded-xl flex items-center justify-center">
+              <Clock className="h-6 w-6 text-yellow-600" />
+            </div>
+            <div className="flex-1">
+              <h3 className="text-lg font-bold text-yellow-900">
+                Subscription Cancelled
+              </h3>
+              <p className="text-yellow-700">
+                Your subscription is cancelled but you still have access until {new Date(subscription.subscription.current_period_end).toLocaleDateString()}. 
+                Reactivate now to continue automatic renewal.
+              </p>
+            </div>
+            <button
+              onClick={() => setShowReactivateModal(true)}
+              className="bg-gradient-to-r from-green-500 to-green-600 text-white px-6 py-3 rounded-xl hover:shadow-lg transition-all duration-200 flex items-center gap-2"
+            >
+              <CheckCircle className="h-4 w-4" />
+              Reactivate
             </button>
           </div>
         </div>
@@ -761,21 +783,13 @@ const BillingPage: React.FC = () => {
 
               {/* Action Buttons */}
               <div className="pt-4 border-t border-gray-200 space-y-3">
-                {subscription.isCancelled && !subscription.isExpired && (
-                  <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
-                    <p className="text-yellow-800 text-sm font-medium">
-                      Subscription cancelled. Access continues until {nextBillingInfo.text}
-                    </p>
-                  </div>
-                )}
-
                 {subscription.isExpired && (
                   <button
                     onClick={() => navigate('/upgrade')}
                     className="w-full py-3 px-4 bg-gradient-to-r from-[#E6A85C] via-[#E85A9B] to-[#D946EF] text-white rounded-lg hover:shadow-lg transition-all duration-200 flex items-center justify-center gap-2"
                   >
                     <Crown className="h-4 w-4" />
-                    Reactivate Subscription
+                    Subscribe Again
                   </button>
                 )}
 
@@ -785,16 +799,6 @@ const BillingPage: React.FC = () => {
                     className="w-full py-2 px-4 text-red-600 border border-red-200 rounded-lg hover:bg-red-50 transition-colors text-sm font-medium"
                   >
                     Cancel Subscription
-                  </button>
-                )}
-
-                {subscription.isCancelled && !subscription.isExpired && (
-                  <button
-                    onClick={() => setShowReactivateModal(true)}
-                    className="w-full py-3 px-4 bg-gradient-to-r from-green-500 to-green-600 text-white rounded-lg hover:shadow-lg transition-all duration-200 flex items-center justify-center gap-2"
-                  >
-                    <CheckCircle className="h-4 w-4" />
-                    Reactivate Subscription
                   </button>
                 )}
               </div>
