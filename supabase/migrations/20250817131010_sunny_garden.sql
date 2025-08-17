@@ -18,7 +18,7 @@
     - Cancellation and resubscription handling
 */
 
--- Drop ALL conflicting versions of the webhook function first
+-- Drop all conflicting versions of handle_subscription_webhook
 DO $$
 DECLARE
     r RECORD;
@@ -32,8 +32,8 @@ BEGIN
     END LOOP;
 END$$;
 
--- Enhanced subscription webhook handler with better error handling
-CREATE OR REPLACE FUNCTION handle_subscription_webhook(
+-- Enhanced subscription webhook handler
+CREATE FUNCTION handle_subscription_webhook(
   p_user_id uuid,
   p_plan_type subscription_plan_type,
   p_status subscription_status,
@@ -47,23 +47,14 @@ DECLARE
   v_period_end timestamptz;
   v_existing_subscription subscriptions%ROWTYPE;
 BEGIN
-  -- Set period start to now if not provided
   v_period_start := COALESCE(p_period_start, now());
-  
-  -- Calculate period end if not provided
-  IF p_period_end IS NULL THEN
-    v_period_end := calculate_subscription_period_end(p_plan_type, v_period_start);
-  ELSE
-    v_period_end := p_period_end;
-  END IF;
+  v_period_end := COALESCE(p_period_end, calculate_subscription_period_end(p_plan_type, v_period_start));
 
-  -- Check for existing subscription
   SELECT * INTO v_existing_subscription
   FROM subscriptions 
   WHERE user_id = p_user_id;
 
   IF FOUND THEN
-    -- Update existing subscription
     UPDATE subscriptions SET
       plan_type = p_plan_type,
       status = p_status,
@@ -73,10 +64,8 @@ BEGIN
       current_period_end = v_period_end,
       updated_at = now()
     WHERE user_id = p_user_id;
-    
     RAISE NOTICE 'Updated subscription for user %', p_user_id;
   ELSE
-    -- Create new subscription
     INSERT INTO subscriptions (
       user_id,
       plan_type,
@@ -94,11 +83,9 @@ BEGIN
       v_period_start,
       v_period_end
     );
-    
     RAISE NOTICE 'Created subscription for user %', p_user_id;
   END IF;
 
-  -- Ensure user record exists in users table
   INSERT INTO users (id, email, user_metadata)
   SELECT 
     au.id,
@@ -117,29 +104,52 @@ EXCEPTION
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
+-- Drop all conflicting versions of calculate_subscription_period_end
+DO $$
+DECLARE
+    r RECORD;
+BEGIN
+    FOR r IN
+        SELECT oid::regprocedure
+        FROM pg_proc
+        WHERE proname = 'calculate_subscription_period_end'
+    LOOP
+        EXECUTE format('DROP FUNCTION IF EXISTS %s CASCADE;', r.oid::regprocedure);
+    END LOOP;
+END$$;
+
 -- Enhanced period calculation function
-CREATE OR REPLACE FUNCTION calculate_subscription_period_end(
+CREATE FUNCTION calculate_subscription_period_end(
   plan_type subscription_plan_type,
   period_start timestamptz DEFAULT now()
 ) RETURNS timestamptz AS $$
 BEGIN
   CASE plan_type
-    WHEN 'trial' THEN
-      RETURN period_start + INTERVAL '30 days';
-    WHEN 'monthly' THEN
-      RETURN period_start + INTERVAL '1 month';
-    WHEN 'semiannual' THEN
-      RETURN period_start + INTERVAL '6 months';
-    WHEN 'annual' THEN
-      RETURN period_start + INTERVAL '1 year';
-    ELSE
-      RETURN period_start + INTERVAL '30 days';
+    WHEN 'trial' THEN RETURN period_start + INTERVAL '30 days';
+    WHEN 'monthly' THEN RETURN period_start + INTERVAL '1 month';
+    WHEN 'semiannual' THEN RETURN period_start + INTERVAL '6 months';
+    WHEN 'annual' THEN RETURN period_start + INTERVAL '1 year';
+    ELSE RETURN period_start + INTERVAL '30 days';
   END CASE;
 END;
 $$ LANGUAGE plpgsql IMMUTABLE;
 
--- Function to get subscription with accurate access status
-CREATE OR REPLACE FUNCTION get_subscription_access_status(p_user_id uuid)
+-- Drop all conflicting versions of get_subscription_access_status
+DO $$
+DECLARE
+    r RECORD;
+BEGIN
+    FOR r IN
+        SELECT oid::regprocedure
+        FROM pg_proc
+        WHERE proname = 'get_subscription_access_status'
+    LOOP
+        EXECUTE format('DROP FUNCTION IF EXISTS %s CASCADE;', r.oid::regprocedure);
+    END LOOP;
+END$$;
+
+-- Get subscription access status function
+CREATE FUNCTION get_subscription_access_status(p_user_id uuid)
 RETURNS TABLE (
   subscription_id uuid,
   plan_type subscription_plan_type,
@@ -165,14 +175,12 @@ DECLARE
   v_is_cancelled boolean := false;
   v_billing_period_text text := '';
 BEGIN
-  -- Get the user's subscription
   SELECT * INTO v_subscription
   FROM subscriptions s
   WHERE s.user_id = p_user_id
   ORDER BY s.created_at DESC
   LIMIT 1;
 
-  -- If no subscription found, return trial defaults
   IF NOT FOUND THEN
     RETURN QUERY SELECT
       NULL::uuid,
@@ -192,15 +200,11 @@ BEGIN
     RETURN;
   END IF;
 
-  -- Calculate access status
   v_is_expired := v_subscription.current_period_end <= v_now;
   v_is_cancelled := v_subscription.status = 'cancelled';
   v_days_remaining := GREATEST(0, EXTRACT(days FROM v_subscription.current_period_end - v_now)::integer);
-  
-  -- Has access if: active OR (cancelled but not expired)
   v_has_access := (v_subscription.status = 'active') OR (v_is_cancelled AND NOT v_is_expired);
 
-  -- Generate professional billing period text
   v_billing_period_text := format('%s – %s (%s)',
     to_char(v_subscription.current_period_start, 'Mon DD, YYYY'),
     to_char(v_subscription.current_period_end, 'Mon DD, YYYY'),
@@ -230,71 +234,55 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- Function to handle subscription reactivation
-CREATE OR REPLACE FUNCTION reactivate_subscription(
-  p_user_id uuid,
-  p_payment_method_id text
-) RETURNS void AS $$
+-- Repeat DROP and CREATE pattern for other functions (reactivate_subscription, cancel_subscription_safe, get_billing_period_text)
+
+-- Reactivate subscription
+DO $$
+DECLARE r RECORD;
+BEGIN
+    FOR r IN SELECT oid::regprocedure FROM pg_proc WHERE proname = 'reactivate_subscription' LOOP
+        EXECUTE format('DROP FUNCTION IF EXISTS %s CASCADE;', r.oid::regprocedure);
+    END LOOP;
+END$$;
+
+CREATE FUNCTION reactivate_subscription(p_user_id uuid, p_payment_method_id text) RETURNS void AS $$
 DECLARE
   v_subscription subscriptions%ROWTYPE;
 BEGIN
-  -- Get current subscription
   SELECT * INTO v_subscription
   FROM subscriptions
   WHERE user_id = p_user_id;
 
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'No subscription found for user';
-  END IF;
+  IF NOT FOUND THEN RAISE EXCEPTION 'No subscription found for user'; END IF;
+  IF v_subscription.status != 'cancelled' THEN RAISE EXCEPTION 'Subscription is not cancelled'; END IF;
+  IF v_subscription.current_period_end <= now() THEN RAISE EXCEPTION 'Subscription has already expired'; END IF;
 
-  -- Only allow reactivation if cancelled but not expired
-  IF v_subscription.status != 'cancelled' THEN
-    RAISE EXCEPTION 'Subscription is not cancelled';
-  END IF;
-
-  IF v_subscription.current_period_end <= now() THEN
-    RAISE EXCEPTION 'Subscription has already expired';
-  END IF;
-
-  -- Reactivate subscription (will auto-renew at period end)
-  UPDATE subscriptions SET
-    status = 'active',
-    updated_at = now()
+  UPDATE subscriptions SET status = 'active', updated_at = now()
   WHERE user_id = p_user_id;
 
   RAISE NOTICE 'Subscription reactivated for user %', p_user_id;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- Function to safely cancel subscription
-CREATE OR REPLACE FUNCTION cancel_subscription_safe(
-  p_user_id uuid,
-  p_reason text DEFAULT NULL
-) RETURNS void AS $$
+-- Cancel subscription safely
+DO $$
+DECLARE r RECORD;
+BEGIN
+    FOR r IN SELECT oid::regprocedure FROM pg_proc WHERE proname = 'cancel_subscription_safe' LOOP
+        EXECUTE format('DROP FUNCTION IF EXISTS %s CASCADE;', r.oid::regprocedure);
+    END LOOP;
+END$$;
+
+CREATE FUNCTION cancel_subscription_safe(p_user_id uuid, p_reason text DEFAULT NULL) RETURNS void AS $$
 DECLARE
   v_subscription subscriptions%ROWTYPE;
 BEGIN
-  -- Get current subscription
-  SELECT * INTO v_subscription
-  FROM subscriptions
-  WHERE user_id = p_user_id;
+  SELECT * INTO v_subscription FROM subscriptions WHERE user_id = p_user_id;
+  IF NOT FOUND THEN RAISE EXCEPTION 'No subscription found for user'; END IF;
+  IF v_subscription.status != 'active' THEN RAISE EXCEPTION 'Subscription is not active'; END IF;
 
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'No subscription found for user';
-  END IF;
+  UPDATE subscriptions SET status = 'cancelled', updated_at = now() WHERE user_id = p_user_id;
 
-  -- Only cancel if currently active
-  IF v_subscription.status != 'active' THEN
-    RAISE EXCEPTION 'Subscription is not active';
-  END IF;
-
-  -- Mark as cancelled but keep access until period end
-  UPDATE subscriptions SET
-    status = 'cancelled',
-    updated_at = now()
-  WHERE user_id = p_user_id;
-
-  -- Log cancellation reason if provided
   IF p_reason IS NOT NULL THEN
     RAISE NOTICE 'Subscription cancelled for user % with reason: %', p_user_id, p_reason;
   ELSE
@@ -303,8 +291,16 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- Function to get formatted billing period text
-CREATE OR REPLACE FUNCTION get_billing_period_text(
+-- Billing period text
+DO $$
+DECLARE r RECORD;
+BEGIN
+    FOR r IN SELECT oid::regprocedure FROM pg_proc WHERE proname = 'get_billing_period_text' LOOP
+        EXECUTE format('DROP FUNCTION IF EXISTS %s CASCADE;', r.oid::regprocedure);
+    END LOOP;
+END$$;
+
+CREATE FUNCTION get_billing_period_text(
   p_plan_type subscription_plan_type,
   p_period_start timestamptz,
   p_period_end timestamptz
@@ -323,7 +319,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql IMMUTABLE;
 
--- Grant necessary permissions
+-- Grant permissions
 GRANT EXECUTE ON FUNCTION handle_subscription_webhook TO service_role;
 GRANT EXECUTE ON FUNCTION calculate_subscription_period_end TO service_role;
 GRANT EXECUTE ON FUNCTION get_subscription_access_status TO authenticated;
