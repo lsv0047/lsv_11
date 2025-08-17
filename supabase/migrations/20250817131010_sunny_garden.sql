@@ -18,16 +18,19 @@
     - Cancellation and resubscription handling
 */
 
--- Drop conflicting version of the webhook function first
-DROP FUNCTION IF EXISTS handle_subscription_webhook(
-  uuid,
-  subscription_plan_type,
-  subscription_status,
-  text,
-  text,
-  timestamptz,
-  timestamptz
-);
+-- Drop ALL conflicting versions of the webhook function first
+DO $$
+DECLARE
+    r RECORD;
+BEGIN
+    FOR r IN
+        SELECT oid::regprocedure
+        FROM pg_proc
+        WHERE proname = 'handle_subscription_webhook'
+    LOOP
+        EXECUTE format('DROP FUNCTION IF EXISTS %s CASCADE;', r.oid::regprocedure);
+    END LOOP;
+END$$;
 
 -- Enhanced subscription webhook handler with better error handling
 CREATE OR REPLACE FUNCTION handle_subscription_webhook(
@@ -327,4 +330,3 @@ GRANT EXECUTE ON FUNCTION get_subscription_access_status TO authenticated;
 GRANT EXECUTE ON FUNCTION reactivate_subscription TO authenticated;
 GRANT EXECUTE ON FUNCTION cancel_subscription_safe TO authenticated;
 GRANT EXECUTE ON FUNCTION get_billing_period_text TO authenticated;
- 
