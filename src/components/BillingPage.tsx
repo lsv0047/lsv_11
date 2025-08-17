@@ -173,6 +173,8 @@ const BillingPage: React.FC = () => {
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [showAddPaymentModal, setShowAddPaymentModal] = useState(false);
   const [cancelReason, setCancelReason] = useState('');
+  const [showReactivateModal, setShowReactivateModal] = useState(false);
+  const [reactivateLoading, setReactivateLoading] = useState(false);
   
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -277,8 +279,30 @@ const BillingPage: React.FC = () => {
       loadBillingData();
     };
 
+    const handleBillingUpdate = () => {
+      console.log('🔄 Billing page: Billing update event received');
+      loadBillingData();
+    };
+
+    const handleStorageUpdate = (e: StorageEvent) => {
+      if (e.key === 'subscription-update-timestamp') {
+        console.log('🔄 Billing page: Storage update event received');
+        loadBillingData();
+      }
+    };
+
+    // Listen to multiple events for comprehensive updates
     window.addEventListener('subscription-updated', handleSubscriptionUpdate);
-    return () => window.removeEventListener('subscription-updated', handleSubscriptionUpdate);
+    window.addEventListener('billing-updated', handleBillingUpdate);
+    window.addEventListener('subscription-refresh', handleSubscriptionUpdate);
+    window.addEventListener('storage', handleStorageUpdate);
+    
+    return () => {
+      window.removeEventListener('subscription-updated', handleSubscriptionUpdate);
+      window.removeEventListener('billing-updated', handleBillingUpdate);
+      window.removeEventListener('subscription-refresh', handleSubscriptionUpdate);
+      window.removeEventListener('storage', handleStorageUpdate);
+    };
   }, []);
 
   const handleCancelSubscription = async () => {
@@ -287,21 +311,64 @@ const BillingPage: React.FC = () => {
     try {
       setActionLoading('cancel');
       
-      // Update subscription status to cancelled in our database
-      await SubscriptionService.updateSubscriptionStatus(subscription.subscription.id, 'cancelled');
+      // Use the enhanced cancellation service
+      await SubscriptionService.cancelSubscription(user.id, cancelReason);
       
       // Refresh subscription data
       await loadBillingData();
       setShowCancelModal(false);
       setCancelReason('');
       
-      // Show success message
-      alert('Subscription cancelled successfully. You will retain access until the end of your billing period.');
+      // Trigger UI refresh
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('subscription-updated'));
+        window.dispatchEvent(new CustomEvent('billing-updated'));
+      }, 500);
       
     } catch (err: any) {
       setError(err.message || 'Failed to cancel subscription');
     } finally {
       setActionLoading(null);
+    }
+  };
+
+  const handleReactivateSubscription = async (paymentMethodId: string) => {
+    if (!user) return;
+
+    try {
+      setReactivateLoading(true);
+      
+      const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/reactivate-subscription`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          paymentMethodId
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to reactivate subscription');
+      }
+
+      // Refresh billing data
+      await loadBillingData();
+      setShowReactivateModal(false);
+      
+      // Trigger comprehensive UI refresh
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('subscription-updated'));
+        window.dispatchEvent(new CustomEvent('billing-updated'));
+        window.dispatchEvent(new CustomEvent('subscription-refresh'));
+      }, 500);
+      
+    } catch (err: any) {
+      setError(err.message || 'Failed to reactivate subscription');
+    } finally {
+      setReactivateLoading(false);
     }
   };
 
@@ -418,19 +485,27 @@ const BillingPage: React.FC = () => {
   const getBillingPeriodText = () => {
     if (!subscription?.subscription) return 'N/A';
     
-    // Use the billing period text from subscription data if available
+    // Always use the professionally formatted billing period text from database
     if (subscription.billingPeriodText) {
       return subscription.billingPeriodText;
     }
     
-    // Fallback calculation
+    // Enhanced fallback with professional formatting
     const startDate = subscription.subscription.current_period_start;
     const endDate = subscription.subscription.current_period_end;
     
     if (!startDate || !endDate) return 'N/A';
     
-    const start = new Date(startDate).toLocaleDateString('en-US');
-    const end = new Date(endDate).toLocaleDateString('en-US');
+    const start = new Date(startDate).toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric'
+    });
+    const end = new Date(endDate).toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric'
+    });
     const planDuration = getPlanDurationText(subscription.subscription.plan_type);
     
     return `${start} – ${end} (${planDuration})`;
@@ -452,13 +527,18 @@ const BillingPage: React.FC = () => {
     const plan = subscription.subscription.plan_type;
     const endDate = subscription.subscription.current_period_end;
     const isCancelled = subscription.isCancelled;
+    const isExpired = subscription.isExpired;
     
     if (isCancelled) {
       return { 
-        text: endDate ? new Date(endDate).toLocaleDateString() : 'N/A', 
+        text: endDate ? new Date(endDate).toLocaleDateString('en-US', {
+          month: 'short',
+          day: 'numeric',
+          year: 'numeric'
+        }) : 'N/A', 
         isOneTime: true,
-        label: 'Access Ends',
-        isExpired: subscription.isExpired
+        label: isExpired ? 'Access Ended' : 'Access Ends',
+        isExpired: isExpired
       };
     }
     
@@ -466,27 +546,39 @@ const BillingPage: React.FC = () => {
       case 'annual':
       case 'semiannual':
         return { 
-          text: endDate ? new Date(endDate).toLocaleDateString() : 'N/A', 
+          text: endDate ? new Date(endDate).toLocaleDateString('en-US', {
+            month: 'short',
+            day: 'numeric',
+            year: 'numeric'
+          }) : 'N/A', 
           isOneTime: true,
-          label: 'Plan Expires',
-          isExpired: subscription.isExpired
+          label: isExpired ? 'Plan Expired' : 'Plan Expires',
+          isExpired: isExpired
         };
       case 'monthly':
         return { 
-          text: endDate ? new Date(endDate).toLocaleDateString() : 'N/A', 
+          text: endDate ? new Date(endDate).toLocaleDateString('en-US', {
+            month: 'short',
+            day: 'numeric',
+            year: 'numeric'
+          }) : 'N/A', 
           isOneTime: false,
-          label: 'Next Billing',
-          isExpired: subscription.isExpired
+          label: isExpired ? 'Last Billing' : 'Next Billing',
+          isExpired: isExpired
         };
       case 'trial':
         return { 
-          text: endDate ? new Date(endDate).toLocaleDateString() : 'N/A', 
+          text: endDate ? new Date(endDate).toLocaleDateString('en-US', {
+            month: 'short',
+            day: 'numeric',
+            year: 'numeric'
+          }) : 'N/A', 
           isOneTime: false,
-          label: 'Trial Ends',
-          isExpired: subscription.isExpired
+          label: isExpired ? 'Trial Ended' : 'Trial Ends',
+          isExpired: isExpired
         };
       default:
-        return { text: 'N/A', isOneTime: false, label: 'Next Billing', isExpired: false };
+        return { text: 'N/A', isOneTime: false, label: 'Next Billing', isExpired: isExpired };
     }
   };
 
@@ -652,6 +744,16 @@ const BillingPage: React.FC = () => {
                     className="w-full py-2 px-4 text-red-600 border border-red-200 rounded-lg hover:bg-red-50 transition-colors text-sm font-medium"
                   >
                     Cancel Subscription
+                  </button>
+                )}
+
+                {subscription.isCancelled && !subscription.isExpired && (
+                  <button
+                    onClick={() => setShowReactivateModal(true)}
+                    className="w-full py-3 px-4 bg-gradient-to-r from-green-500 to-green-600 text-white rounded-lg hover:shadow-lg transition-all duration-200 flex items-center justify-center gap-2"
+                  >
+                    <CheckCircle className="h-4 w-4" />
+                    Reactivate Subscription
                   </button>
                 )}
               </div>
@@ -1025,6 +1127,108 @@ const BillingPage: React.FC = () => {
                 customerId={subscription?.subscription?.stripe_customer_id || ''}
               />
             </Elements>
+          </div>
+        </div>
+      )}
+
+      {/* Reactivate Subscription Modal */}
+      {showReactivateModal && subscription?.subscription?.stripe_customer_id && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl p-6 max-w-md w-full">
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="text-lg font-bold text-gray-900">Reactivate Subscription</h3>
+              <button
+                onClick={() => setShowReactivateModal(false)}
+                className="p-2 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div className="bg-green-50 border border-green-200 rounded-xl p-4">
+                <div className="flex items-start gap-3">
+                  <CheckCircle className="h-5 w-5 text-green-600 mt-0.5" />
+                  <div>
+                    <p className="font-medium text-green-900 mb-1">Reactivate Your Subscription</p>
+                    <p className="text-green-700 text-sm">
+                      Your subscription will be reactivated and will automatically renew at the end of your current billing period.
+                    </p>
+                    <ul className="text-green-700 text-sm mt-2 space-y-1 list-disc list-inside">
+                      <li>Continue enjoying all premium features</li>
+                      <li>Automatic renewal will resume after {nextBillingInfo.text}</li>
+                      <li>No immediate charge - you keep access until period end</li>
+                      <li>Cancel anytime before renewal</li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
+                <h4 className="font-medium text-blue-900 mb-2">Current Plan Details</h4>
+                <div className="space-y-1 text-sm text-blue-800">
+                  <p>Plan: {getPlanDisplayName(subscription.subscription.plan_type)}</p>
+                  <p>Billing Period: {getBillingPeriodText()}</p>
+                  <p>Access Until: {nextBillingInfo.text}</p>
+                </div>
+              </div>
+
+              {paymentMethods.length > 0 && (
+                <div>
+                  <h4 className="font-medium text-gray-900 mb-3">Select Payment Method</h4>
+                  <div className="space-y-2">
+                    {paymentMethods.map((method) => (
+                      <button
+                        key={method.id}
+                        onClick={() => handleReactivateSubscription(method.id)}
+                        disabled={reactivateLoading}
+                        className="w-full flex items-center justify-between p-3 border border-gray-200 rounded-lg hover:border-green-300 hover:bg-green-50 transition-colors disabled:opacity-50"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="w-8 h-8 bg-gray-100 rounded-lg flex items-center justify-center">
+                            <CreditCard className="h-4 w-4 text-gray-600" />
+                          </div>
+                          <div className="text-left">
+                            <p className="font-medium text-gray-900">
+                              {method.card?.brand.toUpperCase()} •••• {method.card?.last4}
+                            </p>
+                            <p className="text-sm text-gray-600">
+                              Expires {method.card?.exp_month}/{method.card?.exp_year}
+                            </p>
+                          </div>
+                        </div>
+                        {method.is_default && (
+                          <span className="px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded-full font-medium">
+                            Default
+                          </span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="flex gap-3 mt-6">
+              <button
+                onClick={() => setShowReactivateModal(false)}
+                className="flex-1 py-3 px-4 border border-gray-200 text-gray-700 rounded-xl hover:bg-gray-50 transition-colors"
+              >
+                Cancel
+              </button>
+              {paymentMethods.length === 0 && (
+                <button
+                  onClick={() => {
+                    setShowReactivateModal(false);
+                    setShowAddPaymentModal(true);
+                  }}
+                  className="flex-1 py-3 px-4 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition-colors flex items-center justify-center gap-2"
+                >
+                  <Plus className="h-4 w-4" />
+                  Add Payment Method
+                </button>
+              )}
+            </div>
           </div>
         </div>
       )}

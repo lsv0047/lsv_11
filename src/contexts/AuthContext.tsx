@@ -94,9 +94,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           // Don't block UI for restaurant fetching
           fetchRestaurant(session.user.id);
           
-          // Trigger subscription refresh for seamless updates
+          // Trigger comprehensive subscription refresh
           setTimeout(() => {
             window.dispatchEvent(new CustomEvent('subscription-updated'));
+            window.dispatchEvent(new CustomEvent('billing-updated'));
           }, 500);
         } else {
           setRestaurant(null);

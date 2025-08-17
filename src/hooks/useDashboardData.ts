@@ -585,10 +585,29 @@ export const useDashboardData = (timeRange: string = '7d') => {
       }, 1000);
     };
 
+    const handleBillingUpdate = () => {
+      console.log('🔄 Billing update event received in dashboard');
+      refreshData();
+    };
+
+    const handleStorageUpdate = (e: StorageEvent) => {
+      if (e.key === 'subscription-update-timestamp') {
+        console.log('🔄 Storage update event received in dashboard');
+        refreshData();
+      }
+    };
+
+    // Listen to multiple events for comprehensive updates
     window.addEventListener('subscription-updated', handleSubscriptionUpdate);
+    window.addEventListener('billing-updated', handleBillingUpdate);
+    window.addEventListener('subscription-refresh', handleSubscriptionUpdate);
+    window.addEventListener('storage', handleStorageUpdate);
     
     return () => {
       window.removeEventListener('subscription-updated', handleSubscriptionUpdate);
+      window.removeEventListener('billing-updated', handleBillingUpdate);
+      window.removeEventListener('subscription-refresh', handleSubscriptionUpdate);
+      window.removeEventListener('storage', handleStorageUpdate);
     };
   }, [refreshData]);
 

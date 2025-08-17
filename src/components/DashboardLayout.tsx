@@ -46,8 +46,30 @@ export default function DashboardLayout() {
       setTimeout(() => setShowUpgradeSuccess(false), 5000);
     };
 
+    const handleBillingUpdate = () => {
+      console.log('🔄 Billing update event received, refreshing...');
+      checkSubscription(true);
+    };
+
+    const handleStorageUpdate = (e: StorageEvent) => {
+      if (e.key === 'subscription-update-timestamp') {
+        console.log('🔄 Storage update event received, refreshing...');
+        checkSubscription(true);
+      }
+    };
+
+    // Listen to multiple events for comprehensive updates
     window.addEventListener('subscription-updated', handleSubscriptionUpdate);
-    return () => window.removeEventListener('subscription-updated', handleSubscriptionUpdate);
+    window.addEventListener('billing-updated', handleBillingUpdate);
+    window.addEventListener('subscription-refresh', handleSubscriptionUpdate);
+    window.addEventListener('storage', handleStorageUpdate);
+    
+    return () => {
+      window.removeEventListener('subscription-updated', handleSubscriptionUpdate);
+      window.removeEventListener('billing-updated', handleBillingUpdate);
+      window.removeEventListener('subscription-refresh', handleSubscriptionUpdate);
+      window.removeEventListener('storage', handleStorageUpdate);
+    };
   }, []);
 
   // Check for payment success in URL and refresh subscription
@@ -69,9 +91,9 @@ export default function DashboardLayout() {
   const checkSubscription = async (forceRefresh: boolean = false) => {
     if (!user) return;
     
-    // Check if we should use cached subscription data (15 minute cache)
+    // Check if we should use cached subscription data (5 minute cache for billing)
     const now = Date.now();
-    const SUBSCRIPTION_CACHE_DURATION = 15 * 60 * 1000; // 15 minutes
+    const SUBSCRIPTION_CACHE_DURATION = 5 * 60 * 1000; // 5 minutes for more responsive billing
     
     if (!forceRefresh && subscriptionData && (now - lastSubscriptionCheck) < SUBSCRIPTION_CACHE_DURATION) {
       console.log('📊 Using cached subscription data');
@@ -220,11 +242,20 @@ export default function DashboardLayout() {
                     <span className="text-xs text-gray-600">Current Plan</span>
                     <span className={`text-xs px-2 py-1 rounded-full font-medium ${
                       subscriptionData.subscription?.plan_type === 'trial' ? 'bg-blue-100 text-blue-800' :
+                      subscriptionData.isCancelled ? 'bg-orange-100 text-orange-800' :
+                      subscriptionData.isExpired ? 'bg-red-100 text-red-800' :
                       'bg-green-100 text-green-800'
                     }`}>
-                      {subscriptionData.subscription?.plan_type || 'Trial'}
+                      {subscriptionData.isCancelled && !subscriptionData.isExpired ? 'Cancelled' :
+                       subscriptionData.isExpired ? 'Expired' :
+                       subscriptionData.subscription?.plan_type || 'Trial'}
                     </span>
                   </div>
+                  {subscriptionData.billingPeriodText && (
+                    <div className="mt-2">
+                      <span className="text-xs text-gray-500">{subscriptionData.billingPeriodText}</span>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
