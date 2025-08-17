@@ -22,6 +22,16 @@ export interface PlanFeatures {
   apiAccess: boolean;
 }
 
+export interface SubscriptionAccessStatus {
+  hasAccess: boolean;
+  subscription: Subscription | null;
+  features: PlanFeatures;
+  daysRemaining?: number;
+  isExpired?: boolean;
+  isCancelled?: boolean;
+  billingPeriodText?: string;
+}
+
 export class SubscriptionService {
   static async createSubscription(
     userId: string,
@@ -30,79 +40,34 @@ export class SubscriptionService {
     stripeCustomerId?: string
   ): Promise<Subscription> {
     try {
-      // First check if user already has a subscription
-      const existingSubscription = await this.getUserSubscription(userId);
-      
-      if (existingSubscription && existingSubscription.status === 'active') {
-        // If user has active subscription, update it instead of creating new one
-        return await this.updateSubscription(existingSubscription.id, planType, stripeSubscriptionId, stripeCustomerId);
-      }
+      console.log('🔄 Creating/updating subscription:', { userId, planType, stripeSubscriptionId, stripeCustomerId });
 
-      // Use database function for accurate period calculation
-      const now = new Date();
-      const periodStart = now.toISOString();
-      
-      // Get accurate period end from database function
-      const { data: periodEndData, error: periodError } = await supabase.rpc('calculate_subscription_period_end', {
-        plan_type: planType,
-        period_start: periodStart
+      // Use the enhanced webhook handler for consistency
+      const { error } = await supabase.rpc('handle_subscription_webhook', {
+        p_user_id: userId,
+        p_plan_type: planType,
+        p_status: 'active',
+        p_stripe_subscription_id: stripeSubscriptionId || null,
+        p_stripe_customer_id: stripeCustomerId || null,
+        p_period_start: new Date().toISOString(),
+        p_period_end: null // Function will calculate
       });
-      
-      if (periodError) {
-        console.error('Error calculating period end:', periodError);
-        throw new Error('Failed to calculate subscription period');
-      }
-      
-      const periodEnd = periodEndData;
-
-      // If existing subscription found, update it instead
-      if (existingSubscription) {
-        const { data, error } = await supabase
-          .from('subscriptions')
-          .update({
-            plan_type: planType,
-            status: 'active',
-            stripe_subscription_id: stripeSubscriptionId,
-            stripe_customer_id: stripeCustomerId,
-            current_period_start: periodStart,
-            current_period_end: periodEnd,
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', existingSubscription.id)
-          .select()
-          .single();
-
-        if (error) {
-          console.error('Subscription update error:', error);
-          throw new Error(`Failed to update subscription: ${error.message}`);
-        }
-        
-        return data;
-      }
-
-      // Create new subscription
-      const { data, error } = await supabase
-        .from('subscriptions')
-        .insert({
-          user_id: userId,
-          plan_type: planType,
-          status: 'active',
-          stripe_subscription_id: stripeSubscriptionId,
-          stripe_customer_id: stripeCustomerId,
-          current_period_start: periodStart,
-          current_period_end: periodEnd
-        })
-        .select()
-        .single();
 
       if (error) {
-        console.error('Subscription creation error:', error);
+        console.error('❌ Error in createSubscription:', error);
         throw new Error(`Failed to create subscription: ${error.message}`);
       }
-      
-      return data;
+
+      // Fetch the created/updated subscription
+      const subscription = await this.getUserSubscription(userId);
+      if (!subscription) {
+        throw new Error('Failed to retrieve created subscription');
+      }
+
+      console.log('✅ Subscription created/updated successfully:', subscription.id);
+      return subscription;
     } catch (error: any) {
-      console.error('Error creating subscription:', error);
+      console.error('💥 Error in createSubscription:', error);
       throw error;
     }
   }
@@ -114,68 +79,64 @@ export class SubscriptionService {
     stripeCustomerId?: string
   ): Promise<Subscription> {
     try {
-      const now = new Date();
-      const periodStart = now.toISOString();
-      
-      // Get accurate period end from database function
-      const { data: periodEndData, error: periodError } = await supabase.rpc('calculate_subscription_period_end', {
-        plan_type: planType,
-        period_start: periodStart
-      });
-      
-      if (periodError) {
-        console.error('Error calculating period end:', periodError);
-        throw new Error('Failed to calculate subscription period');
-      }
+      console.log('🔄 Updating subscription:', { subscriptionId, planType });
 
-      const { data, error } = await supabase
+      // Get current subscription to get user_id
+      const { data: currentSub, error: fetchError } = await supabase
         .from('subscriptions')
-        .update({
-          plan_type: planType,
-          status: 'active',
-          stripe_subscription_id: stripeSubscriptionId,
-          stripe_customer_id: stripeCustomerId,
-          current_period_start: periodStart,
-          current_period_end: periodEndData,
-          updated_at: now.toISOString()
-        })
+        .select('user_id')
         .eq('id', subscriptionId)
-        .select()
         .single();
 
-      if (error) throw error;
-      return data;
+      if (fetchError || !currentSub) {
+        throw new Error('Subscription not found');
+      }
+
+      // Use webhook handler for consistency
+      const { error } = await supabase.rpc('handle_subscription_webhook', {
+        p_user_id: currentSub.user_id,
+        p_plan_type: planType,
+        p_status: 'active',
+        p_stripe_subscription_id: stripeSubscriptionId || null,
+        p_stripe_customer_id: stripeCustomerId || null,
+        p_period_start: new Date().toISOString(),
+        p_period_end: null
+      });
+
+      if (error) {
+        throw new Error(`Failed to update subscription: ${error.message}`);
+      }
+
+      const updatedSubscription = await this.getUserSubscription(currentSub.user_id);
+      if (!updatedSubscription) {
+        throw new Error('Failed to retrieve updated subscription');
+      }
+
+      return updatedSubscription;
     } catch (error: any) {
-      console.error('Error updating subscription:', error);
+      console.error('💥 Error in updateSubscription:', error);
       throw error;
     }
   }
 
   static async getUserSubscription(userId: string): Promise<Subscription | null> {
     try {
-      // Use the new database function for accurate subscription data
-      const { data, error } = await supabase.rpc('get_subscription_with_periods', {
-        user_id_param: userId
-      });
+      const { data, error } = await supabase
+        .from('subscriptions')
+        .select('*')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
 
       if (error) {
-        console.error('Error fetching subscription:', error);
-        // Fallback to basic query
-        const { data: fallbackData, error: fallbackError } = await supabase
-          .from('subscriptions')
-          .select('*')
-          .eq('user_id', userId)
-          .order('created_at', { ascending: false })
-          .limit(1)
-          .maybeSingle();
-        
-        if (fallbackError) return null;
-        return fallbackData;
+        console.error('❌ Error fetching subscription:', error);
+        return null;
       }
-      
-      return data && data.length > 0 ? data[0] : null;
+
+      return data;
     } catch (error: any) {
-      console.error('Error fetching user subscription:', error);
+      console.error('💥 Error in getUserSubscription:', error);
       return null;
     }
   }
@@ -193,93 +154,129 @@ export class SubscriptionService {
         })
         .eq('id', subscriptionId);
 
-      if (error) throw error;
+      if (error) {
+        throw new Error(`Failed to update subscription status: ${error.message}`);
+      }
+
+      console.log('✅ Subscription status updated:', { subscriptionId, status });
     } catch (error: any) {
-      console.error('Error updating subscription status:', error);
+      console.error('💥 Error updating subscription status:', error);
       throw error;
     }
   }
 
-  static async checkSubscriptionAccess(userId: string): Promise<{
-    hasAccess: boolean;
-    subscription: Subscription | null;
-    features: PlanFeatures;
-    daysRemaining?: number;
-    isExpired?: boolean;
-    isCancelled?: boolean;
-  }> {
+  static async cancelSubscription(userId: string, reason?: string): Promise<void> {
     try {
-      // Direct subscription check without RPC function
-      const subscription = await this.getUserSubscription(userId);
-      return this.fallbackAccessCheck(subscription);
+      console.log('🚫 Cancelling subscription for user:', userId);
+
+      const { error } = await supabase.rpc('cancel_subscription_safe', {
+        p_user_id: userId,
+        p_reason: reason || null
+      });
+
+      if (error) {
+        throw new Error(`Failed to cancel subscription: ${error.message}`);
+      }
+
+      console.log('✅ Subscription cancelled successfully');
     } catch (error: any) {
-      console.error('Error checking subscription access:', error);
-      // Fallback to basic access
-      return {
-        hasAccess: true, // Allow access during errors to prevent lockout
-        subscription: null,
-        features: this.getTrialFeatures(),
-        daysRemaining: 30,
-        isExpired: false,
-        isCancelled: false
-      };
+      console.error('💥 Error cancelling subscription:', error);
+      throw error;
     }
   }
 
-  private static fallbackAccessCheck(subscription: Subscription | null): {
-    hasAccess: boolean;
-    subscription: Subscription | null;
-    features: PlanFeatures;
-    daysRemaining?: number;
-    isExpired?: boolean;
-    isCancelled?: boolean;
-    billingPeriodText?: string;
-  } {
-    if (!subscription) {
-      return {
-        hasAccess: true, // Allow access for new users
-        subscription: null,
-        features: this.getTrialFeatures(),
-        daysRemaining: 30,
-        isExpired: false,
-        isCancelled: false,
-        billingPeriodText: 'No active subscription'
-      };
+  static async reactivateSubscription(userId: string, paymentMethodId: string): Promise<void> {
+    try {
+      console.log('🔄 Reactivating subscription for user:', userId);
+
+      const { error } = await supabase.rpc('reactivate_subscription', {
+        p_user_id: userId,
+        p_payment_method_id: paymentMethodId
+      });
+
+      if (error) {
+        throw new Error(`Failed to reactivate subscription: ${error.message}`);
+      }
+
+      console.log('✅ Subscription reactivated successfully');
+    } catch (error: any) {
+      console.error('💥 Error reactivating subscription:', error);
+      throw error;
     }
+  }
 
+  static async checkSubscriptionAccess(userId: string): Promise<SubscriptionAccessStatus> {
+    try {
+      console.log('🔍 Checking subscription access for user:', userId);
+
+      // Use the enhanced database function for accurate status
+      const { data, error } = await supabase.rpc('get_subscription_access_status', {
+        p_user_id: userId
+      });
+
+      if (error) {
+        console.error('❌ Error checking subscription access:', error);
+        // Fallback to basic access for error cases
+        return this.getFallbackAccess();
+      }
+
+      if (!data || data.length === 0) {
+        console.log('📊 No subscription data found, providing trial access');
+        return this.getFallbackAccess();
+      }
+
+      const subscriptionData = data[0];
+      
+      const result: SubscriptionAccessStatus = {
+        hasAccess: subscriptionData.has_access,
+        subscription: {
+          id: subscriptionData.subscription_id,
+          user_id: userId,
+          plan_type: subscriptionData.plan_type,
+          status: subscriptionData.status,
+          stripe_subscription_id: subscriptionData.stripe_subscription_id,
+          stripe_customer_id: subscriptionData.stripe_customer_id,
+          current_period_start: subscriptionData.current_period_start,
+          current_period_end: subscriptionData.current_period_end,
+          created_at: subscriptionData.created_at,
+          updated_at: subscriptionData.updated_at
+        },
+        features: this.getPlanFeatures(subscriptionData.plan_type),
+        daysRemaining: subscriptionData.days_remaining,
+        isExpired: subscriptionData.is_expired,
+        isCancelled: subscriptionData.is_cancelled,
+        billingPeriodText: subscriptionData.billing_period_text
+      };
+
+      console.log('✅ Subscription access checked:', {
+        hasAccess: result.hasAccess,
+        planType: result.subscription?.plan_type,
+        status: result.subscription?.status,
+        daysRemaining: result.daysRemaining,
+        isExpired: result.isExpired,
+        isCancelled: result.isCancelled
+      });
+
+      return result;
+    } catch (error: any) {
+      console.error('💥 Error in checkSubscriptionAccess:', error);
+      return this.getFallbackAccess();
+    }
+  }
+
+  private static getFallbackAccess(): SubscriptionAccessStatus {
     const now = new Date();
-    const endDate = new Date(subscription.current_period_end);
-    const isExpired = endDate <= now;
-    const isCancelled = subscription.status === 'cancelled';
-    
-    // Allow access if subscription is active OR cancelled but not yet expired
-    const hasAccess = (subscription.status === 'active' || (isCancelled && !isExpired)) && endDate > now;
-    const daysRemaining = Math.ceil((endDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-
-    // Generate proper billing period text
-    const startDate = new Date(subscription.current_period_start);
-    const planDurationText = this.getPlanDurationText(subscription.plan_type);
-    const billingPeriodText = `${startDate.toLocaleDateString('en-US')} – ${endDate.toLocaleDateString('en-US')} (${planDurationText})`;
+    const endDate = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000); // 30 days from now
 
     return {
-      hasAccess,
-      subscription,
-      features: this.getPlanFeatures(subscription.plan_type),
-      daysRemaining: Math.max(0, daysRemaining),
-      isExpired,
-      isCancelled,
-      billingPeriodText
+      hasAccess: true,
+      subscription: null,
+      features: this.getTrialFeatures(),
+      daysRemaining: 30,
+      isExpired: false,
+      isCancelled: false,
+      billingPeriodText: `${now.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} – ${endDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} (30 days)`
     };
-  }
-
-  private static getPlanDurationText(planType: string): string {
-    switch (planType) {
-      case 'trial': return '30 days';
-      case 'monthly': return '1 month';
-      case 'semiannual': return '6 months';
-      case 'annual': return '1 year';
-      default: return 'unknown';
-    }
   }
 
   static getPlanFeatures(planType: 'trial' | 'monthly' | 'semiannual' | 'annual'): PlanFeatures {
@@ -287,15 +284,31 @@ export class SubscriptionService {
       case 'trial':
         return this.getTrialFeatures();
       case 'monthly':
+        return {
+          maxCustomers: -1, // Unlimited
+          maxBranches: -1, // Unlimited
+          advancedAnalytics: true,
+          prioritySupport: true,
+          customBranding: false,
+          apiAccess: false
+        };
       case 'semiannual':
+        return {
+          maxCustomers: -1, // Unlimited
+          maxBranches: -1, // Unlimited
+          advancedAnalytics: true,
+          prioritySupport: true,
+          customBranding: true,
+          apiAccess: true
+        };
       case 'annual':
         return {
           maxCustomers: -1, // Unlimited
           maxBranches: -1, // Unlimited
           advancedAnalytics: true,
           prioritySupport: true,
-          customBranding: planType !== 'monthly',
-          apiAccess: planType !== 'monthly'
+          customBranding: true,
+          apiAccess: true
         };
       default:
         return this.getTrialFeatures();
@@ -313,106 +326,24 @@ export class SubscriptionService {
     };
   }
 
-  static async getSystemWideStats(): Promise<{
-    totalRevenue: number;
-    totalCustomers: number;
-    totalRestaurants: number;
-    totalTransactions: number;
-    monthlyGrowth: number;
-  }> {
-    try {
-      // Get all restaurants
-      const { data: restaurants, error: restaurantsError } = await supabase
-        .from('restaurants')
-        .select('id');
-
-      if (restaurantsError) throw restaurantsError;
-
-      const restaurantIds = restaurants?.map(r => r.id) || [];
-
-      // Get system-wide customer data
-      const { data: customers, error: customersError } = await supabase
-        .from('customers')
-        .select('total_spent, created_at')
-        .in('restaurant_id', restaurantIds);
-
-      if (customersError) throw customersError;
-
-      // Get system-wide transaction data
-      const { data: transactions, error: transactionsError } = await supabase
-        .from('transactions')
-        .select('amount_spent, created_at')
-        .in('restaurant_id', restaurantIds);
-
-      if (transactionsError) throw transactionsError;
-
-      // Calculate metrics
-      const totalRevenue = customers?.reduce((sum, c) => sum + parseFloat(c.total_spent?.toString() || '0'), 0) || 0;
-      const totalCustomers = customers?.length || 0;
-      const totalRestaurants = restaurants?.length || 0;
-      const totalTransactions = transactions?.length || 0;
-
-      // Calculate monthly growth
-      const lastMonth = new Date();
-      lastMonth.setMonth(lastMonth.getMonth() - 1);
-      
-      const newCustomersThisMonth = customers?.filter(c => 
-        new Date(c.created_at) > lastMonth
-      ).length || 0;
-      
-      const monthlyGrowth = totalCustomers > 0 ? (newCustomersThisMonth / totalCustomers) * 100 : 0;
-
-      return {
-        totalRevenue,
-        totalCustomers,
-        totalRestaurants,
-        totalTransactions,
-        monthlyGrowth
-      };
-    } catch (error: any) {
-      console.error('Error fetching system-wide stats:', error);
-      return {
-        totalRevenue: 0,
-        totalCustomers: 0,
-        totalRestaurants: 0,
-        totalTransactions: 0,
-        monthlyGrowth: 0
-      };
-    }
+  // Trigger UI refresh across all components
+  static triggerSubscriptionUpdate(): void {
+    console.log('🔄 Triggering subscription update event');
+    
+    // Dispatch multiple events to ensure all components refresh
+    window.dispatchEvent(new CustomEvent('subscription-updated'));
+    window.dispatchEvent(new CustomEvent('billing-updated'));
+    window.dispatchEvent(new CustomEvent('subscription-refresh'));
+    
+    // Also trigger a storage event for cross-tab communication
+    localStorage.setItem('subscription-update-timestamp', Date.now().toString());
+    window.dispatchEvent(new StorageEvent('storage', {
+      key: 'subscription-update-timestamp',
+      newValue: Date.now().toString()
+    }));
   }
 
-  static async getAllSubscriptions(): Promise<(Subscription & { 
-    user_email?: string;
-    restaurant_name?: string;
-  })[]> {
-    try {
-      // Use the database function to get recent subscriptions with proper joins
-      const { data, error } = await supabase.rpc('get_recent_subscriptions', { limit_count: 100 });
-      
-      if (error) {
-        console.error('Error fetching subscriptions via RPC:', error);
-        // Fallback to basic query without joins
-        const { data: basicSubs, error: basicError } = await supabase
-          .from('subscriptions')
-          .select('*')
-          .order('created_at', { ascending: false });
-          
-        if (basicError) throw basicError;
-        
-        return (basicSubs || []).map(sub => ({
-          ...sub,
-          user_email: 'Unknown',
-          restaurant_name: 'Unknown Restaurant'
-        }));
-      }
-      
-      return data || [];
-    } catch (error: any) {
-      console.error('Error fetching all subscriptions:', error);
-      return [];
-    }
-  }
-
+  // Enhanced subscription stats for admin
   static async getSubscriptionStats(): Promise<{
     total: number;
     active: number;
@@ -422,47 +353,31 @@ export class SubscriptionService {
     churnRate: number;
   }> {
     try {
-      // Use the updated database function for accurate statistics
-      const { data, error } = await supabase.rpc('get_subscription_statistics');
+      const { data: subscriptions, error } = await supabase
+        .from('subscriptions')
+        .select('plan_type, status');
+
+      if (error) throw error;
+
+      const total = subscriptions?.length || 0;
+      const active = subscriptions?.filter(s => s.status === 'active').length || 0;
+      const trial = subscriptions?.filter(s => s.plan_type === 'trial').length || 0;
+      const paid = subscriptions?.filter(s => s.plan_type !== 'trial' && s.status === 'active').length || 0;
+      const cancelled = subscriptions?.filter(s => s.status === 'cancelled').length || 0;
       
-      if (error) {
-        console.error('Error fetching subscription stats via RPC:', error);
-        // Fallback to basic calculation
-        const { data: subscriptions, error: basicError } = await supabase
-          .from('subscriptions')
-          .select('plan_type, status');
-
-        if (basicError) throw basicError;
-
-        const total = subscriptions?.length || 0;
-        const active = subscriptions?.filter(s => s.status === 'active').length || 0;
-        const trial = subscriptions?.filter(s => s.plan_type === 'trial').length || 0;
-        const paid = subscriptions?.filter(s => s.plan_type !== 'trial' && s.status === 'active').length || 0;
-        const cancelled = subscriptions?.filter(s => s.status === 'cancelled').length || 0;
-        
-        // Calculate TOTAL revenue generated (not monthly recurring)
-        const totalRevenue = subscriptions?.reduce((sum, sub) => {
-          if (sub.status === 'active' || sub.status === 'expired') {
-            if (sub.plan_type === 'monthly') return sum + 2.99;
-            if (sub.plan_type === 'semiannual') return sum + 9.99;
-            if (sub.plan_type === 'annual') return sum + 19.99;
-          }
-          return sum;
-        }, 0) || 0;
-        
-        const churnRate = total > 0 ? (cancelled / total) * 100 : 0;
-
-        return { total, active, trial, paid, revenue: totalRevenue, churnRate };
-      }
+      // Calculate total revenue generated
+      const totalRevenue = subscriptions?.reduce((sum, sub) => {
+        if (sub.status === 'active' || sub.status === 'expired' || sub.status === 'cancelled') {
+          if (sub.plan_type === 'monthly') return sum + 2.99;
+          if (sub.plan_type === 'semiannual') return sum + 9.99;
+          if (sub.plan_type === 'annual') return sum + 19.99;
+        }
+        return sum;
+      }, 0) || 0;
       
-      return {
-        total: data.total || 0,
-        active: data.active || 0,
-        trial: data.trial || 0,
-        paid: data.paid || 0,
-        revenue: data.totalRevenue || 0, // Now using total revenue instead of monthly
-        churnRate: data.churnRate || 0
-      };
+      const churnRate = total > 0 ? (cancelled / total) * 100 : 0;
+
+      return { total, active, trial, paid, revenue: totalRevenue, churnRate };
     } catch (error: any) {
       console.error('Error fetching subscription stats:', error);
       return {
@@ -476,6 +391,33 @@ export class SubscriptionService {
     }
   }
 
+  static async getAllSubscriptions(): Promise<(Subscription & { 
+    user_email?: string;
+    restaurant_name?: string;
+  })[]> {
+    try {
+      const { data, error } = await supabase
+        .from('subscriptions')
+        .select(`
+          *,
+          user:users(email),
+          restaurant:restaurants(name)
+        `)
+        .order('created_at', { ascending: false });
+        
+      if (error) throw error;
+      
+      return (data || []).map(sub => ({
+        ...sub,
+        user_email: sub.user?.email || 'Unknown',
+        restaurant_name: sub.restaurant?.name || 'Unknown Restaurant'
+      }));
+    } catch (error: any) {
+      console.error('Error fetching all subscriptions:', error);
+      return [];
+    }
+  }
+
   static async getSystemWideStats(): Promise<{
     totalRevenue: number;
     totalCustomers: number;
@@ -484,33 +426,38 @@ export class SubscriptionService {
     monthlyGrowth: number;
   }> {
     try {
-      // Use the database function for comprehensive system stats
-      const { data, error } = await supabase.rpc('get_system_wide_stats');
+      const [restaurantCount, customerCount, transactionCount] = await Promise.all([
+        supabase.from('restaurants').select('*', { count: 'exact', head: true }),
+        supabase.from('customers').select('*', { count: 'exact', head: true }),
+        supabase.from('transactions').select('*', { count: 'exact', head: true })
+      ]);
       
-      if (error) {
-        console.error('Error fetching system stats via RPC:', error);
-        // Fallback to basic queries
-        const [restaurantCount, customerCount, transactionCount] = await Promise.all([
-          supabase.from('restaurants').select('*', { count: 'exact', head: true }),
-          supabase.from('customers').select('*', { count: 'exact', head: true }),
-          supabase.from('transactions').select('*', { count: 'exact', head: true })
-        ]);
-        
-        return {
-          totalRevenue: 0,
-          totalCustomers: customerCount.count || 0,
-          totalRestaurants: restaurantCount.count || 0,
-          totalTransactions: transactionCount.count || 0,
-          monthlyGrowth: 0
-        };
-      }
+      // Calculate total revenue from customer spending
+      const { data: customers } = await supabase
+        .from('customers')
+        .select('total_spent');
       
+      const totalRevenue = customers?.reduce((sum, c) => sum + parseFloat(c.total_spent?.toString() || '0'), 0) || 0;
+      
+      // Calculate monthly growth
+      const lastMonth = new Date();
+      lastMonth.setMonth(lastMonth.getMonth() - 1);
+      
+      const { data: recentCustomers } = await supabase
+        .from('customers')
+        .select('created_at')
+        .gte('created_at', lastMonth.toISOString());
+      
+      const monthlyGrowth = customerCount.count && customerCount.count > 0 
+        ? ((recentCustomers?.length || 0) / customerCount.count) * 100 
+        : 0;
+
       return {
-        totalRevenue: data.totalRevenue || 0,
-        totalCustomers: data.totalCustomers || 0,
-        totalRestaurants: data.totalRestaurants || 0,
-        totalTransactions: data.totalTransactions || 0,
-        monthlyGrowth: 0 // Can be calculated from the data if needed
+        totalRevenue,
+        totalCustomers: customerCount.count || 0,
+        totalRestaurants: restaurantCount.count || 0,
+        totalTransactions: transactionCount.count || 0,
+        monthlyGrowth
       };
     } catch (error: any) {
       console.error('Error fetching system-wide stats:', error);

@@ -120,10 +120,20 @@ if (confirmError) {
       // Payment successful
       onSuccess();
       
-      // Single subscription update event
+      // Trigger comprehensive subscription refresh
       setTimeout(() => {
+        // Multiple events to ensure all components refresh
         window.dispatchEvent(new CustomEvent('subscription-updated'));
-      }, 500);
+        window.dispatchEvent(new CustomEvent('billing-updated'));
+        window.dispatchEvent(new CustomEvent('subscription-refresh'));
+        
+        // Storage event for cross-tab communication
+        localStorage.setItem('subscription-update-timestamp', Date.now().toString());
+        window.dispatchEvent(new StorageEvent('storage', {
+          key: 'subscription-update-timestamp',
+          newValue: Date.now().toString()
+        }));
+      }, 1000); // Increased delay to ensure backend processing
 
     } catch (err: any) {
       console.error('Payment error:', err);

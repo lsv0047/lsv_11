@@ -44,6 +44,13 @@ Deno.serve(async (req: Request) => {
 
     const { planType, autoRenew, paymentMethodId }: PaymentRequest = await req.json();
 
+    console.log('💳 Processing payment request:', {
+      userId: user.id,
+      planType,
+      autoRenew,
+      paymentMethodId: paymentMethodId.substring(0, 10) + '...'
+    });
+
     // Define price mapping
     const priceMap = {
       monthly: Deno.env.get('STRIPE_MONTHLY_PRICE_ID'),
@@ -60,7 +67,7 @@ Deno.serve(async (req: Request) => {
     // Validate that we have a valid price ID
     const priceId = priceMap[planType];
     if (!priceId) {
-      throw new Error(`Price ID not configured for plan: ${planType}`);
+      throw new Error(`Price ID not configured for plan: ${planType}. Please configure Stripe price IDs in environment variables.`);
     }
 
     // Get or create Stripe customer
@@ -70,10 +77,11 @@ Deno.serve(async (req: Request) => {
       .from('subscriptions')
       .select('stripe_customer_id')
       .eq('user_id', user.id)
-      .single();
+      .maybeSingle();
 
     if (existingSubscription?.stripe_customer_id) {
       stripeCustomerId = existingSubscription.stripe_customer_id;
+      console.log('📋 Using existing Stripe customer:', stripeCustomerId);
     } else {
       const customer = await stripe.customers.create({
         email: user.email,
@@ -82,15 +90,24 @@ Deno.serve(async (req: Request) => {
         },
       });
       stripeCustomerId = customer.id;
+      console.log('👤 Created new Stripe customer:', stripeCustomerId);
     }
 
+    // Attach payment method to customer
+    await stripe.paymentMethods.attach(paymentMethodId, {
+      customer: stripeCustomerId,
+    });
+
+    console.log('🔗 Payment method attached to customer');
+
     if (autoRenew) {
-      // Create subscription
+      // Create subscription for auto-renewing plans
+      console.log('🔄 Creating subscription for auto-renew plan');
+      
       const subscription = await stripe.subscriptions.create({
         customer: stripeCustomerId,
         items: [{ price: priceId }],
-        payment_behavior: 'default_incomplete',
-        payment_settings: { save_default_payment_method: 'on_subscription' },
+        default_payment_method: paymentMethodId,
         expand: ['latest_invoice.payment_intent'],
         metadata: {
           user_id: user.id,
@@ -101,10 +118,38 @@ Deno.serve(async (req: Request) => {
       const invoice = subscription.latest_invoice as Stripe.Invoice;
       const paymentIntent = invoice.payment_intent as Stripe.PaymentIntent;
 
+      console.log('✅ Subscription created:', {
+        subscriptionId: subscription.id,
+        status: subscription.status,
+        paymentIntentStatus: paymentIntent.status
+      });
+
+      // If payment is already successful, update our database immediately
+      if (paymentIntent.status === 'succeeded') {
+        console.log('💰 Payment already succeeded, updating database');
+        
+        const { error: dbError } = await supabaseClient.rpc('handle_subscription_webhook', {
+          p_user_id: user.id,
+          p_plan_type: planType,
+          p_status: 'active',
+          p_stripe_subscription_id: subscription.id,
+          p_stripe_customer_id: stripeCustomerId,
+          p_period_start: new Date().toISOString(),
+          p_period_end: null
+        });
+
+        if (dbError) {
+          console.error('❌ Error updating database after successful payment:', dbError);
+        } else {
+          console.log('✅ Database updated successfully after payment');
+        }
+      }
+
       return new Response(
         JSON.stringify({ 
           clientSecret: paymentIntent.client_secret,
-          subscriptionId: subscription.id 
+          subscriptionId: subscription.id,
+          status: paymentIntent.status
         }),
         {
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -112,7 +157,9 @@ Deno.serve(async (req: Request) => {
         }
       );
     } else {
-      // Create one-time payment
+      // Create one-time payment for non-renewing plans
+      console.log('💰 Creating one-time payment');
+      
       const paymentIntent = await stripe.paymentIntents.create({
         amount: amounts[planType],
         currency: 'usd',
@@ -120,17 +167,44 @@ Deno.serve(async (req: Request) => {
         payment_method: paymentMethodId,
         confirmation_method: 'manual',
         confirm: true,
-        return_url: `${Deno.env.get('SUPABASE_URL')}/functions/v1/payment-return`,
         metadata: {
           user_id: user.id,
           plan_type: planType,
         },
       });
 
+      console.log('✅ Payment intent created:', {
+        paymentIntentId: paymentIntent.id,
+        status: paymentIntent.status,
+        amount: paymentIntent.amount
+      });
+
+      // If payment is already successful, update our database immediately
+      if (paymentIntent.status === 'succeeded') {
+        console.log('💰 Payment succeeded immediately, updating database');
+        
+        const { error: dbError } = await supabaseClient.rpc('handle_subscription_webhook', {
+          p_user_id: user.id,
+          p_plan_type: planType,
+          p_status: 'active',
+          p_stripe_subscription_id: null,
+          p_stripe_customer_id: stripeCustomerId,
+          p_period_start: new Date().toISOString(),
+          p_period_end: null
+        });
+
+        if (dbError) {
+          console.error('❌ Error updating database after successful payment:', dbError);
+        } else {
+          console.log('✅ Database updated successfully after payment');
+        }
+      }
+
       return new Response(
         JSON.stringify({ 
           clientSecret: paymentIntent.client_secret,
-          status: paymentIntent.status 
+          status: paymentIntent.status,
+          paymentIntentId: paymentIntent.id
         }),
         {
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -139,7 +213,7 @@ Deno.serve(async (req: Request) => {
       );
     }
   } catch (error) {
-    console.error('Error creating payment:', error);
+    console.error('❌ Error creating payment:', error);
     return new Response(
       JSON.stringify({ error: error.message }),
       {
