@@ -47,116 +47,29 @@ const CheckoutForm: React.FC<{
   const { user } = useAuth();
 
   const handleSubmit = async (event: React.FormEvent) => {
-  event.preventDefault();
+    event.preventDefault();
 
-  if (!stripe || !elements || !user) {
-    return;
-  }
-
-  setLoading(true);
-  setError('');
-
-  try {
-    const cardElement = elements.getElement(CardElement);
-    if (!cardElement) {
-      throw new Error('Card element not found');
+    if (!stripe || !elements || !user) {
+      return;
     }
 
-    // 🔹 Get fresh session from Supabase
-    const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-    if (sessionError || !session?.access_token) {
-      console.error("Supabase session error:", sessionError, session);
-      throw new Error('Authentication error. Please refresh and try again.');
-    }
+    setLoading(true);
+    setError('');
 
-    // 🔹 Create PaymentIntent (or subscription) via backend
-    const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/create-payment`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${session.access_token}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        planType: plan.planId,
-        autoRenew,
-      })
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      console.error("Backend error response:", errorData);
-      throw new Error(errorData.error || 'Payment processing failed on server');
-    }
-
-    const { clientSecret, subscriptionId } = await response.json();
-    console.log("Received clientSecret:", clientSecret, "subscriptionId:", subscriptionId);
-
-    if (!clientSecret) {
-      throw new Error("No clientSecret returned from server");
-    }
-
-    // 🔹 Confirm payment directly with card details
-    const { error: confirmError, paymentIntent } = await stripe.confirmCardPayment(clientSecret, {
-      payment_method: {
-        card: cardElement,
-        billing_details: {
-          email: user.email,
-        },
-      },
-    });
-
-    if (confirmError) {
-      console.error("Stripe confirm error:", confirmError);
-      throw new Error(confirmError.message);
-    }
-
-    console.log("Payment successful:", paymentIntent);
-
-    // 🔹 Trigger success callback
-    onSuccess();
-
-    // 🔹 Refresh subscription state across app
-    setTimeout(() => {
-      window.dispatchEvent(new CustomEvent('subscription-updated'));
-      window.dispatchEvent(new CustomEvent('billing-updated'));
-      window.dispatchEvent(new CustomEvent('subscription-refresh'));
-
-      localStorage.setItem('subscription-update-timestamp', Date.now().toString());
-      window.dispatchEvent(new StorageEvent('storage', {
-        key: 'subscription-update-timestamp',
-        newValue: Date.now().toString()
-      }));
-    }, 1000);
-
-  } catch (err: any) {
-    console.error('Payment error:', err);
-    setError(err.message || 'Payment failed. Please try again.');
-  } finally {
-    setLoading(false);
-  }
-};
-
-
-      // Create payment method
-      const { error: paymentMethodError, paymentMethod } = await stripe.createPaymentMethod({
-        type: 'card',
-        card: cardElement,
-        billing_details: {
-          email: user.email,
-        },
-      });
-
-      if (paymentMethodError) {
-        throw new Error(paymentMethodError.message);
+    try {
+      const cardElement = elements.getElement(CardElement);
+      if (!cardElement) {
+        throw new Error('Card element not found');
       }
 
-      // Get fresh session
+      // Get fresh session from Supabase
       const { data: { session }, error: sessionError } = await supabase.auth.getSession();
       if (sessionError || !session?.access_token) {
+        console.error("Supabase session error:", sessionError, session);
         throw new Error('Authentication error. Please refresh and try again.');
       }
 
-      // Create payment intent or subscription
+      // Create PaymentIntent (or subscription) via backend
       const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/create-payment`, {
         method: 'POST',
         headers: {
@@ -166,49 +79,54 @@ const CheckoutForm: React.FC<{
         body: JSON.stringify({
           planType: plan.planId,
           autoRenew,
-          paymentMethodId: paymentMethod.id,
         })
       });
 
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Payment processing failed');
+        const errorData = await response.json().catch(() => ({}));
+        console.error("Backend error response:", errorData);
+        throw new Error(errorData.error || 'Payment processing failed on server');
       }
 
       const { clientSecret, subscriptionId } = await response.json();
+      console.log("Received clientSecret:", clientSecret, "subscriptionId:", subscriptionId);
 
-      // Confirm payment with card details
-const { error: confirmError, paymentIntent } = await stripe.confirmCardPayment(clientSecret, {
-  payment_method: {
-    card: cardElement,
-    billing_details: {
-      email: user.email,
-    },
-  },
-});
+      if (!clientSecret) {
+        throw new Error("No clientSecret returned from server");
+      }
 
-if (confirmError) {
-  throw new Error(confirmError.message);
-}
+      // Confirm payment directly with card details
+      const { error: confirmError, paymentIntent } = await stripe.confirmCardPayment(clientSecret, {
+        payment_method: {
+          card: cardElement,
+          billing_details: {
+            email: user.email,
+          },
+        },
+      });
 
+      if (confirmError) {
+        console.error("Stripe confirm error:", confirmError);
+        throw new Error(confirmError.message);
+      }
 
-      // Payment successful
+      console.log("Payment successful:", paymentIntent);
+
+      // Trigger success callback
       onSuccess();
-      
-      // Trigger comprehensive subscription refresh
+
+      // Refresh subscription state across app
       setTimeout(() => {
-        // Multiple events to ensure all components refresh
         window.dispatchEvent(new CustomEvent('subscription-updated'));
         window.dispatchEvent(new CustomEvent('billing-updated'));
         window.dispatchEvent(new CustomEvent('subscription-refresh'));
-        
-        // Storage event for cross-tab communication
+
         localStorage.setItem('subscription-update-timestamp', Date.now().toString());
         window.dispatchEvent(new StorageEvent('storage', {
           key: 'subscription-update-timestamp',
           newValue: Date.now().toString()
         }));
-      }, 1000); // Increased delay to ensure backend processing
+      }, 1000);
 
     } catch (err: any) {
       console.error('Payment error:', err);
