@@ -69,6 +69,15 @@ const CheckoutForm: React.FC<{
         throw new Error('Authentication error. Please refresh and try again.');
       }
 
+      // Log the request payload for debugging
+      const requestPayload = {
+        planType: plan.planId,
+        autoRenew,
+      };
+      console.log("Sending payment request:", requestPayload);
+      console.log("User:", user);
+      console.log("Session:", session);
+
       // Create PaymentIntent (or subscription) via backend
       const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/create-payment`, {
         method: 'POST',
@@ -76,19 +85,40 @@ const CheckoutForm: React.FC<{
           'Authorization': `Bearer ${session.access_token}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          planType: plan.planId,
-          autoRenew,
-        })
+        body: JSON.stringify(requestPayload)
       });
 
+      console.log("Response status:", response.status);
+      console.log("Response headers:", Object.fromEntries(response.headers.entries()));
+
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
+        const responseText = await response.text();
+        console.error("Backend error response text:", responseText);
+        
+        let errorData;
+        try {
+          errorData = JSON.parse(responseText);
+        } catch (parseError) {
+          console.error("Failed to parse error response as JSON:", parseError);
+          throw new Error(`Server error (${response.status}): ${responseText}`);
+        }
+        
         console.error("Backend error response:", errorData);
         throw new Error(errorData.error || 'Payment processing failed on server');
       }
 
-      const { clientSecret, subscriptionId } = await response.json();
+      const responseText = await response.text();
+      console.log("Success response text:", responseText);
+      
+      let responseData;
+      try {
+        responseData = JSON.parse(responseText);
+      } catch (parseError) {
+        console.error("Failed to parse success response as JSON:", parseError);
+        throw new Error("Invalid response from server");
+      }
+      
+      const { clientSecret, subscriptionId } = responseData;
       console.log("Received clientSecret:", clientSecret, "subscriptionId:", subscriptionId);
 
       if (!clientSecret) {
