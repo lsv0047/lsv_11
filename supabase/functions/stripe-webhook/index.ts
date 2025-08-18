@@ -64,6 +64,22 @@ Deno.serve(async (req: Request) => {
           const userId = session.metadata.user_id;
           const planType = session.metadata.plan_type as 'monthly' | 'semiannual' | 'annual';
           
+          // Calculate accurate period dates
+          const periodStart = new Date();
+          let periodEnd = new Date();
+          
+          switch (planType) {
+            case 'monthly':
+              periodEnd.setMonth(periodEnd.getMonth() + 1);
+              break;
+            case 'semiannual':
+              periodEnd.setMonth(periodEnd.getMonth() + 6);
+              break;
+            case 'annual':
+              periodEnd.setFullYear(periodEnd.getFullYear() + 1);
+              break;
+          }
+          
           // Handle both subscription and payment modes
           const { error } = await supabase.rpc('handle_subscription_webhook', {
             p_user_id: userId,
@@ -71,8 +87,8 @@ Deno.serve(async (req: Request) => {
             p_status: 'active',
             p_stripe_subscription_id: session.subscription as string || null,
             p_stripe_customer_id: session.customer as string,
-            p_period_start: new Date().toISOString(),
-            p_period_end: null // Function will calculate based on plan type
+            p_period_start: periodStart.toISOString(),
+            p_period_end: periodEnd.toISOString()
           });
 
           if (error) {
@@ -106,14 +122,30 @@ Deno.serve(async (req: Request) => {
           const userId = paymentIntent.metadata.user_id;
           const planType = paymentIntent.metadata.plan_type as 'monthly' | 'semiannual' | 'annual';
           
+          // Calculate accurate period dates for one-time payments
+          const periodStart = new Date();
+          let periodEnd = new Date();
+          
+          switch (planType) {
+            case 'monthly':
+              periodEnd.setMonth(periodEnd.getMonth() + 1);
+              break;
+            case 'semiannual':
+              periodEnd.setMonth(periodEnd.getMonth() + 6);
+              break;
+            case 'annual':
+              periodEnd.setFullYear(periodEnd.getFullYear() + 1);
+              break;
+          }
+          
           const { error } = await supabase.rpc('handle_subscription_webhook', {
             p_user_id: userId,
             p_plan_type: planType,
             p_status: 'active',
             p_stripe_subscription_id: null, // One-time payments don't have subscription IDs
             p_stripe_customer_id: paymentIntent.customer as string,
-            p_period_start: new Date().toISOString(),
-            p_period_end: null // Function will calculate based on plan type
+            p_period_start: periodStart.toISOString(),
+            p_period_end: periodEnd.toISOString()
           });
 
           if (error) {

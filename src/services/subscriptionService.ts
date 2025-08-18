@@ -281,10 +281,12 @@ export class SubscriptionService {
     endDate: Date,
     planType: string
   ): string {
-    // Calculate actual days between dates
-    const actualDays = Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24));
+    // Professional billing period formatting like Stripe, Netflix, etc.
+    const now = new Date();
+    const isExpired = endDate <= now;
+    const statusPrefix = isExpired ? 'Expired: ' : '';
     
-    // Format dates professionally
+    // Format dates professionally (e.g., "Jan 15, 2025")
     const startStr = startDate.toLocaleDateString('en-US', {
       month: 'short',
       day: 'numeric',
@@ -296,49 +298,30 @@ export class SubscriptionService {
       year: 'numeric'
     });
     
-    // Get accurate duration text based on actual days and plan type
-    const durationText = this.getAccuratePlanDurationText(actualDays, planType);
+    // Get professional duration text based on plan type
+    const durationText = this.getProfessionalPlanDurationText(planType);
     
-    return `${startStr} – ${endStr} (${durationText})`;
+    return `${statusPrefix}${startStr} – ${endStr} (${durationText})`;
   }
 
-  private static getAccuratePlanDurationText(actualDays: number, planType: string): string {
+  private static getProfessionalPlanDurationText(planType: string): string {
+    // Return professional duration text regardless of actual days
+    // This matches how professional apps like Stripe, Netflix, etc. display billing periods
     switch (planType) {
       case 'trial':
-        return `${actualDays} days`;
+        return '30-day trial';
       
       case 'monthly':
-        // For monthly plans, show actual days if unusual, otherwise "1 month"
-        if (actualDays >= 28 && actualDays <= 31) {
-          return '1 month';
-        }
-        return `${actualDays} days`;
+        return '1 month';
       
       case 'semiannual':
-        // For semiannual plans, show "6 months" if within reasonable range
-        if (actualDays >= 180 && actualDays <= 190) {
-          return '6 months';
-        }
-        // Otherwise show actual duration
-        const months = Math.round(actualDays / 30.44);
-        return `${months} months`;
+        return '6 months';
       
       case 'annual':
-        // For annual plans, show "1 year" if within reasonable range
-        if (actualDays >= 365 && actualDays <= 366) {
-          return '1 year';
-        }
-        // For longer periods, calculate years
-        const years = actualDays / 365.25;
-        if (years >= 1.9) {
-          return `${Math.round(years)} years`;
-        }
-        // For unusual periods, show months
-        const annualMonths = Math.round(actualDays / 30.44);
-        return `${annualMonths} months`;
+        return '1 year';
       
       default:
-        return `${actualDays} days`;
+        return 'subscription';
     }
   }
 

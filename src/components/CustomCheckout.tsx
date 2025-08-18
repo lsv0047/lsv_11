@@ -142,9 +142,6 @@ const CheckoutForm: React.FC<{
 
       console.log("Payment successful:", paymentIntent);
 
-      // Trigger success callback
-      onSuccess();
-
       // Refresh subscription state across app
       setTimeout(() => {
         window.dispatchEvent(new CustomEvent('subscription-updated'));
@@ -156,6 +153,9 @@ const CheckoutForm: React.FC<{
           key: 'subscription-update-timestamp',
           newValue: Date.now().toString()
         }));
+        
+        // Trigger success callback after events are dispatched
+        onSuccess();
       }, 1000);
 
     } catch (err: any) {

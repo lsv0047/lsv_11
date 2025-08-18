@@ -105,6 +105,8 @@ Deno.serve(async (req: Request) => {
           user_id: user.id,
           plan_type: planType,
         },
+        // Ensure billing cycle anchor is set properly for accurate periods
+        billing_cycle_anchor: Math.floor(Date.now() / 1000),
       });
 
       const invoice = subscription.latest_invoice as Stripe.Invoice;
