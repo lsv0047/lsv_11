@@ -55,40 +55,22 @@ Deno.serve(async (req: Request) => {
           userId: session.metadata?.user_id,
           planType: session.metadata?.plan_type,
           customerId: session.customer,
-          subscriptionId: session.subscription,
-          mode: session.mode,
-          paymentStatus: session.payment_status
+          subscriptionId: session.subscription
         });
         
-        if (session.metadata?.user_id && session.metadata?.plan_type && session.payment_status === 'paid') {
+        if (session.metadata?.user_id && session.metadata?.plan_type) {
           const userId = session.metadata.user_id;
           const planType = session.metadata.plan_type as 'monthly' | 'semiannual' | 'annual';
           
-          // Calculate accurate period dates
-          const periodStart = new Date();
-          let periodEnd = new Date();
-          
-          switch (planType) {
-            case 'monthly':
-              periodEnd.setMonth(periodEnd.getMonth() + 1);
-              break;
-            case 'semiannual':
-              periodEnd.setMonth(periodEnd.getMonth() + 6);
-              break;
-            case 'annual':
-              periodEnd.setFullYear(periodEnd.getFullYear() + 1);
-              break;
-          }
-          
-          // Handle both subscription and payment modes
+          // Use the database function for reliable updates
           const { error } = await supabase.rpc('handle_subscription_webhook', {
             p_user_id: userId,
             p_plan_type: planType,
             p_status: 'active',
             p_stripe_subscription_id: session.subscription as string || null,
             p_stripe_customer_id: session.customer as string,
-            p_period_start: periodStart.toISOString(),
-            p_period_end: periodEnd.toISOString()
+            p_period_start: new Date().toISOString(),
+            p_period_end: null // Function will calculate based on plan type
           });
 
           if (error) {
@@ -98,10 +80,7 @@ Deno.serve(async (req: Request) => {
             console.log('✅ Subscription updated successfully via checkout for user:', userId);
           }
         } else {
-          console.warn('⚠️ Missing metadata or payment not completed in checkout session:', {
-            metadata: session.metadata,
-            paymentStatus: session.payment_status
-          });
+          console.warn('⚠️ Missing metadata in checkout session:', session.metadata);
         }
         break;
       }
@@ -113,39 +92,22 @@ Deno.serve(async (req: Request) => {
           userId: paymentIntent.metadata?.user_id,
           planType: paymentIntent.metadata?.plan_type,
           amount: paymentIntent.amount,
-          customerId: paymentIntent.customer,
-          status: paymentIntent.status
+          customerId: paymentIntent.customer
         });
         
-        // Only process if this is a subscription payment (has metadata)
         if (paymentIntent.metadata?.user_id && paymentIntent.metadata?.plan_type) {
           const userId = paymentIntent.metadata.user_id;
           const planType = paymentIntent.metadata.plan_type as 'monthly' | 'semiannual' | 'annual';
           
-          // Calculate accurate period dates for one-time payments
-          const periodStart = new Date();
-          let periodEnd = new Date();
-          
-          switch (planType) {
-            case 'monthly':
-              periodEnd.setMonth(periodEnd.getMonth() + 1);
-              break;
-            case 'semiannual':
-              periodEnd.setMonth(periodEnd.getMonth() + 6);
-              break;
-            case 'annual':
-              periodEnd.setFullYear(periodEnd.getFullYear() + 1);
-              break;
-          }
-          
+          // Use the database function for reliable updates
           const { error } = await supabase.rpc('handle_subscription_webhook', {
             p_user_id: userId,
             p_plan_type: planType,
             p_status: 'active',
             p_stripe_subscription_id: null, // One-time payments don't have subscription IDs
             p_stripe_customer_id: paymentIntent.customer as string,
-            p_period_start: periodStart.toISOString(),
-            p_period_end: periodEnd.toISOString()
+            p_period_start: new Date().toISOString(),
+            p_period_end: null // Function will calculate based on plan type
           });
 
           if (error) {
@@ -155,7 +117,7 @@ Deno.serve(async (req: Request) => {
             console.log('✅ Subscription updated successfully via payment intent for user:', userId);
           }
         } else {
-          console.log('ℹ️ Payment intent without subscription metadata, skipping');
+          console.warn('⚠️ Missing metadata in payment intent:', paymentIntent.metadata);
         }
         break;
       }
@@ -166,15 +128,13 @@ Deno.serve(async (req: Request) => {
           invoiceId: invoice.id,
           subscriptionId: invoice.subscription,
           customerId: invoice.customer,
-          amount: invoice.amount_paid,
-          periodStart: invoice.period_start,
-          periodEnd: invoice.period_end
+          amount: invoice.amount_paid
         });
         
         if (invoice.subscription) {
           try {
             const subscription = await stripe.subscriptions.retrieve(invoice.subscription as string);
-            console.log('📋 Retrieved subscription details for invoice:', {
+            console.log('📋 Retrieved subscription details:', {
               subscriptionId: subscription.id,
               userId: subscription.metadata?.user_id,
               planType: subscription.metadata?.plan_type,
@@ -187,7 +147,7 @@ Deno.serve(async (req: Request) => {
               const { error } = await supabase.rpc('handle_subscription_webhook', {
                 p_user_id: subscription.metadata.user_id,
                 p_plan_type: (subscription.metadata.plan_type || 'monthly') as 'monthly' | 'semiannual' | 'annual',
-                p_status: subscription.status === 'active' ? 'active' : 'past_due',
+                p_status: 'active',
                 p_stripe_subscription_id: subscription.id,
                 p_stripe_customer_id: subscription.customer as string,
                 p_period_start: new Date(subscription.current_period_start * 1000).toISOString(),
@@ -213,8 +173,7 @@ Deno.serve(async (req: Request) => {
         console.log('❌ Invoice payment failed:', {
           invoiceId: invoice.id,
           subscriptionId: invoice.subscription,
-          customerId: invoice.customer,
-          amountDue: invoice.amount_due
+          customerId: invoice.customer
         });
         
         if (invoice.subscription) {
@@ -240,45 +199,6 @@ Deno.serve(async (req: Request) => {
             }
           } catch (subscriptionError) {
             console.error('❌ Error retrieving subscription for failed invoice:', subscriptionError);
-          }
-        }
-        break;
-      }
-
-      case 'customer.subscription.updated': {
-        const subscription = event.data.object as Stripe.Subscription;
-        console.log('🔄 Subscription updated:', {
-          subscriptionId: subscription.id,
-          userId: subscription.metadata?.user_id,
-          status: subscription.status,
-          cancelAtPeriodEnd: subscription.cancel_at_period_end,
-          currentPeriodEnd: subscription.current_period_end
-        });
-        
-        if (subscription.metadata?.user_id) {
-          // Determine status based on Stripe subscription status
-          let dbStatus: 'active' | 'cancelled' | 'past_due' = 'active';
-          
-          if (subscription.status === 'past_due') {
-            dbStatus = 'past_due';
-          } else if (subscription.cancel_at_period_end || subscription.status === 'canceled') {
-            dbStatus = 'cancelled';
-          }
-
-          const { error } = await supabase.rpc('handle_subscription_webhook', {
-            p_user_id: subscription.metadata.user_id,
-            p_plan_type: (subscription.metadata.plan_type || 'monthly') as 'monthly' | 'semiannual' | 'annual',
-            p_status: dbStatus,
-            p_stripe_subscription_id: subscription.id,
-            p_stripe_customer_id: subscription.customer as string,
-            p_period_start: new Date(subscription.current_period_start * 1000).toISOString(),
-            p_period_end: new Date(subscription.current_period_end * 1000).toISOString()
-          });
-
-          if (error) {
-            console.error('❌ Error updating subscription via subscription.updated:', error);
-          } else {
-            console.log('✅ Subscription updated successfully via subscription.updated:', subscription.id);
           }
         }
         break;
@@ -336,4 +256,4 @@ Deno.serve(async (req: Request) => {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }
     });
   }
-});
+}); 
