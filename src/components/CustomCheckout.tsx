@@ -14,7 +14,7 @@ import {
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 
-const stripePromise = loadStripe(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY); 
+const stripePromise = loadStripe(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY);
 
 interface Plan {
   planId: string;
@@ -62,101 +62,68 @@ const CheckoutForm: React.FC<{
         throw new Error('Card element not found');
       }
 
-      // Get fresh session from Supabase
+      // Create payment method
+      const { error: paymentMethodError, paymentMethod } = await stripe.createPaymentMethod({
+        type: 'card',
+        card: cardElement,
+        billing_details: {
+          email: user.email,
+        },
+      });
+
+      if (paymentMethodError) {
+        throw new Error(paymentMethodError.message);
+      }
+
+      // Get fresh session
       const { data: { session }, error: sessionError } = await supabase.auth.getSession();
       if (sessionError || !session?.access_token) {
-        console.error("Supabase session error:", sessionError, session);
         throw new Error('Authentication error. Please refresh and try again.');
       }
 
-      // Log the request payload for debugging
-      const requestPayload = {
-        planType: plan.planId,
-        autoRenew,
-      };
-      console.log("Sending payment request:", requestPayload);
-      console.log("User:", user);
-      console.log("Session:", session);
-
-      // Create PaymentIntent (or subscription) via backend
+      // Create payment intent or subscription
       const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/create-payment`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${session.access_token}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(requestPayload)
+        body: JSON.stringify({
+          planType: plan.planId,
+          autoRenew,
+          paymentMethodId: paymentMethod.id,
+        })
       });
-
-      console.log("Response status:", response.status);
-      console.log("Response headers:", Object.fromEntries(response.headers.entries()));
 
       if (!response.ok) {
-        const responseText = await response.text();
-        console.error("Backend error response text:", responseText);
-        
-        let errorData;
-        try {
-          errorData = JSON.parse(responseText);
-        } catch (parseError) {
-          console.error("Failed to parse error response as JSON:", parseError);
-          throw new Error(`Server error (${response.status}): ${responseText}`);
-        }
-        
-        console.error("Backend error response:", errorData);
-        throw new Error(errorData.error || 'Payment processing failed on server');
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Payment processing failed');
       }
 
-      const responseText = await response.text();
-      console.log("Success response text:", responseText);
+      const { clientSecret, subscriptionId } = await response.json();
+
+      // Confirm payment with card details
+const { error: confirmError, paymentIntent } = await stripe.confirmCardPayment(clientSecret, {
+  payment_method: {
+    card: cardElement,
+    billing_details: {
+      email: user.email,
+    },
+  },
+});
+
+if (confirmError) {
+  throw new Error(confirmError.message);
+}
+
+
+      // Payment successful
+      onSuccess();
       
-      let responseData;
-      try {
-        responseData = JSON.parse(responseText);
-      } catch (parseError) {
-        console.error("Failed to parse success response as JSON:", parseError);
-        throw new Error("Invalid response from server");
-      }
-      
-      const { clientSecret, subscriptionId } = responseData;
-      console.log("Received clientSecret:", clientSecret, "subscriptionId:", subscriptionId);
-
-      if (!clientSecret) {
-        throw new Error("No clientSecret returned from server");
-      }
-
-      // Confirm payment directly with card details
-      const { error: confirmError, paymentIntent } = await stripe.confirmCardPayment(clientSecret, {
-        payment_method: {
-          card: cardElement,
-          billing_details: {
-            email: user.email,
-          },
-        },
-      });
-
-      if (confirmError) {
-        console.error("Stripe confirm error:", confirmError);
-        throw new Error(confirmError.message);
-      }
-
-      console.log("Payment successful:", paymentIntent);
-
-      // Refresh subscription state across app
+      // Single subscription update event
       setTimeout(() => {
         window.dispatchEvent(new CustomEvent('subscription-updated'));
-        window.dispatchEvent(new CustomEvent('billing-updated'));
-        window.dispatchEvent(new CustomEvent('subscription-refresh'));
-
-        localStorage.setItem('subscription-update-timestamp', Date.now().toString());
-        window.dispatchEvent(new StorageEvent('storage', {
-          key: 'subscription-update-timestamp',
-          newValue: Date.now().toString()
-        }));
-        
-        // Trigger success callback after events are dispatched
-        onSuccess();
-      }, 1000);
+      }, 500);
 
     } catch (err: any) {
       console.error('Payment error:', err);
@@ -326,4 +293,4 @@ const CustomCheckout: React.FC<CustomCheckoutProps> = ({ plan, autoRenew, onSucc
   );
 };
 
-export default CustomCheckout; 
+export default CustomCheckout;
