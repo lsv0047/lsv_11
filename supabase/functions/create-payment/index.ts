@@ -10,6 +10,7 @@ const corsHeaders = {
 interface PaymentRequest {
   planType: 'monthly' | 'semiannual' | 'annual';
   autoRenew: boolean;
+  paymentMethodId: string;
 }
 
 Deno.serve(async (req: Request) => {
@@ -41,13 +42,7 @@ Deno.serve(async (req: Request) => {
       apiVersion: '2023-10-16',
     });
 
-    const { planType, autoRenew }: PaymentRequest = await req.json();
-
-    console.log('💳 Processing payment request:', {
-      userId: user.id,
-      planType,
-      autoRenew,
-    });
+    const { planType, autoRenew, paymentMethodId }: PaymentRequest = await req.json();
 
     // Define price mapping
     const priceMap = {
@@ -62,6 +57,12 @@ Deno.serve(async (req: Request) => {
       annual: 1999 // $19.99 in cents
     };
 
+    // Validate that we have a valid price ID
+    const priceId = priceMap[planType];
+    if (!priceId) {
+      throw new Error(`Price ID not configured for plan: ${planType}`);
+    }
+
     // Get or create Stripe customer
     let stripeCustomerId: string;
 
@@ -69,11 +70,10 @@ Deno.serve(async (req: Request) => {
       .from('subscriptions')
       .select('stripe_customer_id')
       .eq('user_id', user.id)
-      .maybeSingle();
+      .single();
 
     if (existingSubscription?.stripe_customer_id) {
       stripeCustomerId = existingSubscription.stripe_customer_id;
-      console.log('📋 Using existing Stripe customer:', stripeCustomerId);
     } else {
       const customer = await stripe.customers.create({
         email: user.email,
@@ -82,19 +82,10 @@ Deno.serve(async (req: Request) => {
         },
       });
       stripeCustomerId = customer.id;
-      console.log('👤 Created new Stripe customer:', stripeCustomerId);
     }
 
     if (autoRenew) {
-      // For subscriptions, we need to create a setup intent first to collect payment method
-      // Then create the subscription with the payment method
-      const priceId = priceMap[planType];
-      if (!priceId) {
-        throw new Error(`Price ID not configured for plan: ${planType}. Please configure Stripe price IDs in environment variables.`);
-      }
-
-      console.log('🔄 Creating subscription for auto-renew plan');
-      
+      // Create subscription
       const subscription = await stripe.subscriptions.create({
         customer: stripeCustomerId,
         items: [{ price: priceId }],
@@ -105,24 +96,15 @@ Deno.serve(async (req: Request) => {
           user_id: user.id,
           plan_type: planType,
         },
-        // Ensure billing cycle anchor is set properly for accurate periods
-        billing_cycle_anchor: Math.floor(Date.now() / 1000),
       });
 
       const invoice = subscription.latest_invoice as Stripe.Invoice;
       const paymentIntent = invoice.payment_intent as Stripe.PaymentIntent;
 
-      console.log('✅ Subscription created:', {
-        subscriptionId: subscription.id,
-        status: subscription.status,
-        paymentIntentStatus: paymentIntent.status
-      });
-
       return new Response(
         JSON.stringify({ 
           clientSecret: paymentIntent.client_secret,
-          subscriptionId: subscription.id,
-          status: paymentIntent.status
+          subscriptionId: subscription.id 
         }),
         {
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -130,33 +112,25 @@ Deno.serve(async (req: Request) => {
         }
       );
     } else {
-      // Create one-time payment intent for non-renewing plans
-      console.log('💰 Creating one-time payment intent');
-      
+      // Create one-time payment
       const paymentIntent = await stripe.paymentIntents.create({
         amount: amounts[planType],
         currency: 'usd',
         customer: stripeCustomerId,
-        automatic_payment_methods: {
-          enabled: true,
-        },
+        payment_method: paymentMethodId,
+        confirmation_method: 'manual',
+        confirm: true,
+        return_url: `${Deno.env.get('SUPABASE_URL')}/functions/v1/payment-return`,
         metadata: {
           user_id: user.id,
           plan_type: planType,
         },
       });
 
-      console.log('✅ Payment intent created:', {
-        paymentIntentId: paymentIntent.id,
-        status: paymentIntent.status,
-        amount: paymentIntent.amount
-      });
-
       return new Response(
         JSON.stringify({ 
           clientSecret: paymentIntent.client_secret,
-          status: paymentIntent.status,
-          paymentIntentId: paymentIntent.id
+          status: paymentIntent.status 
         }),
         {
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -165,7 +139,7 @@ Deno.serve(async (req: Request) => {
       );
     }
   } catch (error) {
-    console.error('❌ Error creating payment:', error);
+    console.error('Error creating payment:', error);
     return new Response(
       JSON.stringify({ error: error.message }),
       {
