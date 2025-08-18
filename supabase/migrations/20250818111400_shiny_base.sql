@@ -14,6 +14,8 @@
     - Fix existing incorrect billing periods
     - Ensure all future periods are calculated correctly
 */
+-- Drop dependent trigger first (if exists)
+DROP TRIGGER IF EXISTS trigger_update_billing_period_text ON subscriptions;
 
 -- Drop existing functions if they exist
 DROP FUNCTION IF EXISTS calculate_subscription_period_end(text, timestamptz);
